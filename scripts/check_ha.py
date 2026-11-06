@@ -613,6 +613,7 @@ async def service_contract():
         response_mode = ["valid"]
         protected_response = "synthetic_protected_response_value"
         failures = []
+        unjudgeable_cases = []
 
         class SyntheticAI(AITaskEntity):
             _attr_name = "Example Vision"
@@ -636,6 +637,11 @@ async def service_contract():
                 if response_mode[0] == "malformed":
                     data["frame_1_score"] = protected_response
                 else:
+                    if response_mode[0] in ("model_reported", "both"):
+                        data["frame_1_judgeable"] = False
+                    if response_mode[0] in ("missing_evidence", "both"):
+                        data["frame_1_score"] = 0.8
+                        data["frame_1_evidence"] = " "
                     assert task.structure(data) == data
                 calls.append("resolved_synthetic_attachment")
                 return GenDataTaskResult(conversation_id="synthetic_session", data=data)
@@ -662,6 +668,30 @@ async def service_contract():
             assert {path.name for path in media.iterdir()} == {"unrelated.txt"}
             adapter = monitor.screen.__self__
             printer = runtime.printers[0]
+            sensor_id = er.async_get(hass).async_get_entity_id(
+                "sensor", "printer_guard", f"printer_guard_{printer.prefix}_diagnostic"
+            )
+            assert sensor_id is not None
+            for mode, reasons in (
+                ("model_reported", ["model_reported"]),
+                ("missing_evidence", ["missing_evidence"]),
+                ("both", ["model_reported", "missing_evidence"]),
+            ):
+                response_mode[0] = mode
+                hass.states.async_set(printer.entity("sensor", "task_name"), mode)
+                await runtime.run(name, monitor)
+                diagnostic = runtime.diagnostics[name]
+                assert diagnostic["outcome"] == "degraded"
+                assert diagnostic["assessment_stage"] == "screen"
+                assert diagnostic["unjudgeable_reasons"] == reasons
+                assert diagnostic["notification"] == "not_requested"
+                assert diagnostic["last_usable_assessment"] is None
+                state = hass.states.get(sensor_id)
+                assert state.state == "degraded"
+                assert state.attributes["assessment_stage"] == "screen"
+                assert state.attributes["unjudgeable_reasons"] == reasons
+                assert "synthetic clear frame" not in json.dumps(dict(state.attributes))
+                unjudgeable_cases.append({"stage": "screen", "reasons": reasons})
             for case, entity, support, mode, phase, category in (
                 (
                     "missing_entity",
@@ -699,6 +729,8 @@ async def service_contract():
                 assert diagnostic["failure_category"] == category, diagnostic
                 assert diagnostic["notification"] == "not_requested"
                 assert diagnostic["last_usable_assessment"] is None
+                assert "unjudgeable_reasons" not in diagnostic
+                assert "assessment_stage" not in diagnostic
                 assert protected_response not in json.dumps(diagnostic)
                 assert not any(
                     token in json.dumps(diagnostic)
@@ -716,7 +748,8 @@ async def service_contract():
                 name
             ]
             assert runtime.diagnostics[name]["last_usable_assessment"]
-            assert len(calls) == 3
+            assert len(calls) == 6
+            assert "unjudgeable_reasons" not in hass.states.get(sensor_id).attributes
             assert not monitor.allow_pause and not runtime.latch.data
             assert not runtime.staging.active
             assert {path.name for path in media.iterdir()} == {"unrelated.txt"}
@@ -727,6 +760,7 @@ async def service_contract():
         "actual_entity_routing": True,
         "actual_local_media_resolution": True,
         "actual_service_failure_cases": failures,
+        "actual_service_unjudgeable_cases": unjudgeable_cases,
         "recovery_after_failures": True,
         "fake_provider_requests": len(calls),
         "external_provider_calls": 0,
