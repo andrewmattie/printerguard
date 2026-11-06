@@ -269,6 +269,12 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((first.writes,second.writes),(1,0))
                 self.assertEqual(first.native_value,'clear')
                 self.assertEqual(set(first.extra_state_attributes),{'last_check','last_usable_assessment','check_started','assessment','notification','freshness'})
+                async def unjudgeable(): return 'comparison_unjudgeable'
+                await runtime.run(first.printer.prefix,SimpleNamespace(run=unjudgeable,
+                    last_unjudgeable_reasons=('model_reported','missing_evidence')))
+                self.assertEqual(first.extra_state_attributes['assessment_stage'],'comparison')
+                self.assertEqual(first.extra_state_attributes['unjudgeable_reasons'],['model_reported','missing_evidence'])
+                self.assertNotIn('unjudgeable_reasons',second.extra_state_attributes)
                 async def failure(): return 'unavailable_or_error'
                 detail={'phase':'frame_validation','category':'invalid_data','reason':'duplicate_frame'}
                 with self.assertLogs('printer_guard',level='WARNING'):
@@ -281,6 +287,60 @@ class Tests(unittest.IsolatedAsyncioTestCase):
 
 
 class HealthTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unjudgeable_inputs_are_distinguished_without_private_content(self):
+        from test_engine import Fake
+        for stage in ('screen','comparison'):
+            for judgeable,score,evidence,reasons in (
+                (False,0,'synthetic-private-view',['model_reported']),
+                (True,0.8,' ',['missing_evidence']),
+                (False,0.9,'',['model_reported','missing_evidence']),
+            ):
+                with self.subTest(stage=stage,reasons=reasons), tempfile.TemporaryDirectory() as directory:
+                    fake=Fake()
+                    rejected={'judgeable':judgeable,'score':score,'evidence':evidence}
+                    if stage == 'screen':
+                        fake.result=rejected
+                    else:
+                        async def comparison(*args): return [fake.result,rejected,fake.result]
+                        fake.compare=comparison
+                    runtime=Runtime(SimpleNamespace(),Path(directory),Latch(FakeStore()),SETTINGS)
+                    name=next(iter(runtime.jobs))
+                    monitor=fake.monitor(on_started=lambda new_job:runtime.check_started(name,new_job))
+                    await runtime.run(name,monitor)
+                    diagnostic=runtime.diagnostics[name]
+                    self.assertEqual(diagnostic['outcome'],'degraded')
+                    self.assertEqual(diagnostic['assessment'],'unjudgeable')
+                    self.assertEqual(diagnostic['assessment_stage'],stage)
+                    self.assertEqual(diagnostic['unjudgeable_reasons'],reasons)
+                    self.assertIsNone(diagnostic['last_usable_assessment'])
+                    self.assertEqual(diagnostic['notification'],'not_requested')
+                    self.assertNotIn('private',str(runtime.diagnostics))
+                    self.assertFalse(any(isinstance(call,tuple) for call in fake.called))
+                    async def fail(): raise OSError('synthetic-private-failure')
+                    capture=monitor.capture; monitor.capture=fail
+                    with self.assertLogs('printer_guard',level='WARNING'):
+                        await runtime.run(name,monitor)
+                    self.assertEqual(runtime.diagnostics[name]['outcome'],'failure')
+                    self.assertNotIn('unjudgeable_reasons',runtime.diagnostics[name])
+                    self.assertNotIn('assessment_stage',runtime.diagnostics[name])
+                    monitor.capture=capture; fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
+                    await runtime.run(name,monitor)
+                    self.assertEqual(runtime.diagnostics[name]['outcome'],'clear')
+                    self.assertNotIn('unjudgeable_reasons',runtime.diagnostics[name])
+                    self.assertNotIn('assessment_stage',runtime.diagnostics[name])
+
+    async def test_unjudgeable_detail_never_copies_untrusted_values(self):
+        async def result(): return 'screen_unjudgeable'
+        with tempfile.TemporaryDirectory() as directory:
+            runtime=Runtime(SimpleNamespace(),Path(directory),Latch(FakeStore()),SETTINGS)
+            name=next(iter(runtime.jobs))
+            for reasons in (('model_reported','private-target'), ['model_reported'],
+                            ('model_reported','missing_evidence','private-response'), (object(),)):
+                await runtime.run(name,SimpleNamespace(run=result,last_unjudgeable_reasons=reasons))
+                self.assertEqual(runtime.diagnostics[name]['assessment_stage'],'screen')
+                self.assertNotIn('unjudgeable_reasons',runtime.diagnostics[name])
+                self.assertNotIn('private',str(runtime.diagnostics))
+
     async def test_usable_time_survives_degradation_failure_and_skips(self):
         from test_engine import Fake
         fake=Fake(); fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}

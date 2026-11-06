@@ -157,6 +157,12 @@ class Runtime:
                 diagnostic['reason']=SKIP_REASONS[result]
             elif result in DEGRADED_REASONS:
                 diagnostic['reason']=DEGRADED_REASONS[result]
+            if result in ('screen_unjudgeable','comparison_unjudgeable'):
+                diagnostic['assessment_stage']='screen' if result == 'screen_unjudgeable' else 'comparison'
+                reasons=getattr(monitor,'last_unjudgeable_reasons',())
+                if (type(reasons) is tuple and 0 < len(reasons) <= 2
+                        and all(type(reason) is str and reason in ('model_reported','missing_evidence') for reason in reasons)):
+                    diagnostic['unjudgeable_reasons']=list(dict.fromkeys(reasons))
             if result == 'unavailable_or_error':
                 detail=(None if unexpected else getattr(monitor,'last_error',None))
                 detail=detail if isinstance(detail,dict) else {}

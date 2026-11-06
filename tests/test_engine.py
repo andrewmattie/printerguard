@@ -56,11 +56,13 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
         f.reserve=no
         self.assertEqual(await f.monitor(allow_pause=True).run(),'already_attempted'); self.assertNotIn('pause',f.called)
     async def test_unjudgeable_and_empty_high_score_evidence_are_degraded(self):
-        for result in ({'judgeable':False,'score':0,'evidence':'obscured'},
-                       {'judgeable':True,'score':0.9,'evidence':' '}):
+        for result,reasons in (({'judgeable':False,'score':0,'evidence':'obscured'},('model_reported',)),
+                       ({'judgeable':True,'score':0.9,'evidence':' '},('missing_evidence',)),
+                       ({'judgeable':False,'score':0.9,'evidence':' '},('model_reported','missing_evidence'))):
             fake=Fake(); fake.result=result; monitor=fake.monitor()
             self.assertEqual(await monitor.run(),'screen_unjudgeable')
             self.assertEqual(monitor.last_assessment,'unjudgeable')
+            self.assertEqual(monitor.last_unjudgeable_reasons,reasons)
             self.assertFalse(monitor.assessment_usable)
             self.assertNotIn('compare',fake.called)
 
@@ -74,6 +76,21 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(monitor.assessment_usable,expected=='comparison_not_confirmed')
             self.assertFalse(any(isinstance(call,tuple) for call in fake.called))
             self.assertNotIn('pause',fake.called)
+
+    async def test_comparison_records_both_rejection_inputs_and_resets(self):
+        fake=Fake()
+        async def comparison(*args):
+            return [fake.result, {'judgeable':False,'score':0,'evidence':'private view'},
+                    {'judgeable':True,'score':0.8,'evidence':' '}]
+        fake.compare=comparison; monitor=fake.monitor()
+        self.assertEqual(await monitor.run(),'comparison_unjudgeable')
+        self.assertEqual(monitor.last_unjudgeable_reasons,('model_reported','missing_evidence'))
+        self.assertFalse(monitor.assessment_usable)
+        self.assertFalse(any(isinstance(call,tuple) for call in fake.called))
+        fake.result={'judgeable':True,'score':0.79,'evidence':''}
+        self.assertEqual(await monitor.run(),'screen_clear')
+        self.assertEqual(monitor.last_unjudgeable_reasons,())
+        self.assertTrue(monitor.assessment_usable)
 
     async def test_compare_failure_no_pause(self):
         f=Fake()

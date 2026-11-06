@@ -125,6 +125,7 @@ class Monitor:
         self.history_job = None
         self.last_freshness = 'not_checked'
         self.last_assessment = 'not_checked'
+        self.last_unjudgeable_reasons = ()
         self.assessment_usable = False
         self.last_notification = 'not_requested'
         self.on_started = on_started
@@ -203,6 +204,7 @@ class Monitor:
             self.last_error = None
             self.last_freshness = 'not_checked'
             self.last_assessment = 'not_checked'
+            self.last_unjudgeable_reasons = ()
             self.assessment_usable = False
             self.last_notification = 'not_requested'
             phase = 'context'
@@ -231,7 +233,11 @@ class Monitor:
                 if self.clock() - f.received_at > self.inference_timeout + 5: return 'stale_result'
                 # Static scenes still receive an advisory assessment. Repeated
                 # bytes cannot refresh usable health or escalate to an alert.
-                judgeable = first.judgeable and (first.score < 0.8 or bool(first.evidence.strip()))
+                self.last_unjudgeable_reasons = tuple(label for label, applies in (
+                    ('model_reported', not first.judgeable),
+                    ('missing_evidence', first.score >= 0.8 and not first.evidence.strip()),
+                ) if applies)
+                judgeable = not self.last_unjudgeable_reasons
                 self.last_assessment = 'unjudgeable' if not judgeable else 'suspicious' if suspicious(first) else 'clear'
                 if repeated: return 'repeated_view'
                 if not judgeable: return 'screen_unjudgeable'
@@ -257,7 +263,11 @@ class Monitor:
                 if not isinstance(raw, list) or len(raw) != 3:
                     raise ValueError('invalid comparison shape')
                 assessments = [verdict(x) for x in raw]
-                if any(not item.judgeable or item.score >= 0.8 and not item.evidence.strip() for item in assessments):
+                self.last_unjudgeable_reasons = tuple(label for label, applies in (
+                    ('model_reported', any(not item.judgeable for item in assessments)),
+                    ('missing_evidence', any(item.score >= 0.8 and not item.evidence.strip() for item in assessments)),
+                ) if applies)
+                if self.last_unjudgeable_reasons:
                     self.last_assessment = 'unjudgeable'
                     return 'comparison_unjudgeable'
                 self.assessment_usable = True
