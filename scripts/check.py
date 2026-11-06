@@ -65,6 +65,19 @@ def main():
     manifest = json.loads((ROOT / 'custom_components/p1s_guard/manifest.json').read_text())
     if manifest['domain'] != 'p1s_guard' or not manifest['version']:
         raise SystemExit('Invalid integration manifest identity or version.')
+    required = {'domain', 'name', 'documentation', 'issue_tracker', 'codeowners', 'version'}
+    if not required <= manifest.keys():
+        raise SystemExit('Integration manifest is missing required distribution metadata.')
+    hacs = json.loads((ROOT / 'hacs.json').read_text())
+    if not hacs.get('name') or hacs.get('homeassistant') != '2026.10.4':
+        raise SystemExit('Invalid HACS display name or supported Home Assistant baseline.')
+    from PIL import Image
+    brand = ROOT / 'custom_components/p1s_guard/brand'
+    for filename, size in (('icon.png', 256), ('icon@2x.png', 512)):
+        with Image.open(brand / filename) as icon:
+            if icon.format != 'PNG' or icon.size != (size, size):
+                raise SystemExit(f'Invalid packaged icon: {filename}')
+            icon.load()
     example = yaml.safe_load((ROOT / 'examples/configuration.yaml').read_text())
     parse_config(example['p1s_guard'])
     check_public_links()
@@ -77,7 +90,7 @@ def main():
             run(['git', 'diff', '--cached', '--check'], environment)
         else:
             print('Git whitespace check skipped: this is not a Git checkout.')
-    print('Unit, compilation, manifest JSON, example configuration and public link checks passed.')
+    print('Unit, compilation, distribution metadata, icons, example configuration and public link checks passed.')
     if arguments.hassfest_core:
         check_hassfest(arguments.hassfest_core)
     else:

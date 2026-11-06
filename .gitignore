@@ -248,3 +248,7 @@ p1s_guard_tmp_*/
 
 # Internal
 docs/internal/
+
+# Original integration artwork; keep all camera images ignored.
+!custom_components/p1s_guard/brand/icon.png
+!custom_components/p1s_guard/brand/icon@2x.png
