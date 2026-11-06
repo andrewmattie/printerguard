@@ -60,6 +60,7 @@ class Runtime:
         self.started=time.monotonic()
         self.jobs={}
         self.tasks=set()
+        self.pending=set()
         self.last_notice={}
         self.stopping=False
         self.unsub=None
@@ -96,10 +97,14 @@ class Runtime:
     def tick(self, _now):
         if self.stopping or time.monotonic()-self.started < 120: return
         for name,monitor in self.jobs.items():
-            if monitor.lock.locked(): continue
+            if name in self.pending or monitor.lock.locked(): continue
+            self.pending.add(name)
             task=self.hass.async_create_task(self.run(name,monitor))
             self.tasks.add(task)
-            task.add_done_callback(self.tasks.discard)
+            def completed(done,key=name):
+                self.tasks.discard(done)
+                self.pending.discard(key)
+            task.add_done_callback(completed)
 
     def publish(self,name):
         for observer in tuple(self.observers):
