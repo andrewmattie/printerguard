@@ -83,6 +83,13 @@ def safe_error_category(error: Exception) -> str:
     if isinstance(error, ValueError): return 'invalid_data'
     return 'other'
 
+class NotificationFailure(Exception):
+    """Keep the notification boundary identifiable without exposing its payload."""
+    def __init__(self, error):
+        super().__init__('notification failed')
+        self.error = error
+
+
 class Monitor:
     """One screen followed by a bounded three-frame comparison.
 
@@ -93,7 +100,7 @@ class Monitor:
     def __init__(self, *, capture, screen, compare, context, reserve, pause, notify,
                  clock, sleep=asyncio.sleep, allow_pause=False, interval=30.0,
                  capture_timeout=15.0, inference_timeout=40.0, max_frame_bytes=8_000_000,
-                 ai_phase=lambda: 'ai_service'):
+                 ai_phase=lambda: 'ai_service', notification_timeout=10.0):
         self.capture, self.screen, self.compare, self.context = capture, screen, compare, context
         self.reserve, self.pause, self.notify = reserve, pause, notify
         self.clock, self.sleep, self.allow_pause, self.interval = clock, sleep, allow_pause, interval
@@ -101,6 +108,13 @@ class Monitor:
         self.lock = asyncio.Lock()
         self.ai_phase = ai_phase
         self.last_error = None
+        self.notification_timeout = notification_timeout
+
+    async def send_notice(self, message):
+        try:
+            return await asyncio.wait_for(self.notify(message), self.notification_timeout)
+        except Exception as error:
+            raise NotificationFailure(error) from None
 
     def same_session(self, original: Context) -> bool:
         current = self.context()
@@ -182,33 +196,36 @@ class Monitor:
                 freshness_verified = all(ids) and len(set(ids)) == 3
                 if not self.allow_pause or not freshness_verified:
                     phase = 'notification'
-                    await self.notify('Possible print failure; three assessments were suspicious. No pause was sent; frame freshness or automatic pause is not verified.')
+                    await self.send_notice('Possible print failure; three assessments were suspicious. No pause was sent; frame freshness or automatic pause is not verified.')
                     return 'monitor_only'
                 if not self.same_session(initial): return 'session_changed'
                 try:
                     reserved = await self.reserve(initial.task, initial.start)
                 except Exception:
-                    await self.notify('Possible print failure. Could not safely reserve a pause attempt; no pause was sent. Check the printer.')
+                    await self.send_notice('Possible print failure. Could not safely reserve a pause attempt; no pause was sent. Check the printer.')
                     return 'reservation_failed'
                 if not reserved: return 'already_attempted'
                 if not self.same_session(initial): return 'session_changed'
                 try:
                     await self.pause()
                 except Exception:
-                    await self.notify('Possible print failure. The pause request failed or its result is uncertain; check the printer.')
+                    await self.send_notice('Possible print failure. The pause request failed or its result is uncertain; check the printer.')
                     return 'pause_uncertain'
                 # Confirm actual reported state; do not claim success merely from service return.
                 for _ in range(5):
                     if self.context().status == 'pause':
-                        await self.notify('Possible print failure. The printer reports paused.')
+                        await self.send_notice('Possible print failure. The printer reports paused.')
                         return 'paused_confirmed'
                     await self.sleep(2)
-                await self.notify('Possible print failure. A pause was requested, but paused status was not confirmed; check the printer.')
+                await self.send_notice('Possible print failure. A pause was requested, but paused status was not confirmed; check the printer.')
                 return 'pause_unconfirmed'
             except asyncio.CancelledError:
                 raise
             except Exception as error:
-                if phase == 'camera_capture':
+                if isinstance(error, NotificationFailure):
+                    phase = 'notification'
+                    error = error.error
+                elif phase == 'camera_capture':
                     phase = self.capture_phase
                 if phase in ('screen_ai', 'comparison_ai'):
                     candidate = self.ai_phase()
