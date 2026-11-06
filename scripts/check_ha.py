@@ -590,14 +590,21 @@ async def service_contract():
         hass, media = await start(Path(directory), configuration(1))
         runtime = hass.data["p1s_guard"]
         calls = []
+        full_features = (
+            AITaskEntityFeature.GENERATE_DATA | AITaskEntityFeature.SUPPORT_ATTACHMENTS
+        )
+        features = [full_features]
+        response_mode = ["valid"]
+        protected_response = "synthetic_protected_response_value"
+        failures = []
 
         class SyntheticAI(AITaskEntity):
             _attr_name = "Example Vision"
             _attr_unique_id = "printguard_synthetic_ai"
-            _attr_supported_features = (
-                AITaskEntityFeature.GENERATE_DATA
-                | AITaskEntityFeature.SUPPORT_ATTACHMENTS
-            )
+
+            @property
+            def supported_features(self):
+                return features[0]
 
             async def _async_generate_data(self, task, chat_log):
                 assert task.attachments and len(task.attachments) == 1
@@ -610,7 +617,10 @@ async def service_contract():
                     "frame_1_score": 0.1,
                     "frame_1_evidence": "synthetic clear frame",
                 }
-                assert task.structure(data) == data
+                if response_mode[0] == "malformed":
+                    data["frame_1_score"] = protected_response
+                else:
+                    assert task.structure(data) == data
                 calls.append("resolved_synthetic_attachment")
                 return GenDataTaskResult(conversation_id="synthetic_session", data=data)
 
@@ -634,13 +644,75 @@ async def service_contract():
             ]
             assert calls == ["resolved_synthetic_attachment"]
             assert {path.name for path in media.iterdir()} == {"unrelated.txt"}
+            adapter = monitor.screen.__self__
+            printer = runtime.printers[0]
+            for case, entity, support, mode, phase, category in (
+                (
+                    "missing_entity",
+                    "ai_task.missing_synthetic_entity",
+                    full_features,
+                    "valid",
+                    "ai_service",
+                    "validation",
+                ),
+                (
+                    "unsupported_attachments",
+                    "ai_task.example_vision",
+                    AITaskEntityFeature.GENERATE_DATA,
+                    "valid",
+                    "ai_service",
+                    "validation",
+                ),
+                (
+                    "malformed_response",
+                    "ai_task.example_vision",
+                    full_features,
+                    "malformed",
+                    "screen_verdict",
+                    "invalid_data",
+                ),
+            ):
+                adapter.entity_id = entity
+                features[0] = support
+                response_mode[0] = mode
+                hass.states.async_set(printer.entity("sensor", "task_name"), case)
+                await runtime.run(name, monitor)
+                diagnostic = runtime.diagnostics[name]
+                assert diagnostic["outcome"] == "failure", diagnostic
+                assert diagnostic["failure_phase"] == phase, diagnostic
+                assert diagnostic["failure_category"] == category, diagnostic
+                assert diagnostic["notification"] == "not_requested"
+                assert diagnostic["last_usable_assessment"] is None
+                assert protected_response not in json.dumps(diagnostic)
+                assert not any(
+                    token in json.dumps(diagnostic)
+                    for token in ("ai_task.", "camera.", "/tmp/")
+                )
+                assert {path.name for path in media.iterdir()} == {"unrelated.txt"}
+                failures.append({"case": case, "phase": phase, "category": category})
+            assert protected_response not in "\n".join(problems)
+            response_mode[0] = "valid"
+            hass.states.async_set(
+                printer.entity("sensor", "task_name"), "recovered synthetic job"
+            )
+            await runtime.run(name, monitor)
+            assert runtime.diagnostics[name]["outcome"] == "clear", runtime.diagnostics[
+                name
+            ]
+            assert runtime.diagnostics[name]["last_usable_assessment"]
+            assert len(calls) == 3
+            assert not monitor.allow_pause and not runtime.latch.data
+            assert not runtime.staging.active
+            assert {path.name for path in media.iterdir()} == {"unrelated.txt"}
         finally:
             await hass.async_stop(force=True)
     return {
         "actual_ai_service_schema": True,
         "actual_entity_routing": True,
         "actual_local_media_resolution": True,
-        "fake_provider_requests": 1,
+        "actual_service_failure_cases": failures,
+        "recovery_after_failures": True,
+        "fake_provider_requests": len(calls),
         "external_provider_calls": 0,
         "external_notifications": 0,
         "printer_commands": 0,
