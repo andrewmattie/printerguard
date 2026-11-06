@@ -1,0 +1,6 @@
+-r requirements-dev.txt
+homeassistant==2026.10.4
+infrared-protocols==10.1.0
+pipdeptree==4.2.5
+ruff==0.16.9
+tqdm==4.70.1
