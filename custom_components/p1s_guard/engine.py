@@ -1,10 +1,11 @@
-"""Dependency-free, fail-closed print monitoring engine."""
+"""Fail-closed print monitoring engine with injected service boundaries."""
 from __future__ import annotations
 import asyncio
 import hashlib
 import math
 from dataclasses import dataclass
 from typing import Any
+from .frame_validation import verify_jpeg
 
 @dataclass(frozen=True)
 class Context:
@@ -47,6 +48,7 @@ FRAME_FAILURE_REASONS = frozenset({
     'missing_frame', 'invalid_frame_bytes', 'frame_too_small', 'frame_too_large',
     'invalid_jpeg_markers', 'invalid_capture_timestamp', 'future_capture',
     'stale_capture', 'duplicate_frame', 'unsupported_image_format',
+    'invalid_jpeg_data', 'frame_dimensions_exceeded', 'frame_pixel_limit_exceeded',
 })
 
 
@@ -145,6 +147,11 @@ class Monitor:
         if age < 0:
             raise FrameValidationError('future_capture')
         if age > 5:
+            raise FrameValidationError('stale_capture')
+        reason = await asyncio.to_thread(verify_jpeg, f.content)
+        if reason is not None:
+            raise FrameValidationError(reason)
+        if self.clock() - f.captured_at > 5:
             raise FrameValidationError('stale_capture')
         digest = hashlib.sha256(f.content).hexdigest()
         if digest in seen:

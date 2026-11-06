@@ -1,12 +1,11 @@
 import asyncio
-import importlib.util
 from pathlib import Path
 import sys
 import unittest
 
-p = Path(__file__).parents[1] / 'custom_components' / 'p1s_guard' / 'engine.py'
-spec = importlib.util.spec_from_file_location('p1s_engine', p)
-e = importlib.util.module_from_spec(spec); sys.modules[spec.name] = e; spec.loader.exec_module(e)
+sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'))
+from p1s_guard import engine as e
+from guard_fixtures import synthetic_jpeg
 
 class Fake:
     def __init__(self):
@@ -16,7 +15,7 @@ class Fake:
     def clock(self): return self.t
     async def sleep(self,n): self.t += n
     async def capture(self):
-        self.n += 1; data=b'\xff\xd8'+(b'a' if self.same else bytes([self.n]))+b'\xff\xd9'
+        self.n += 1; data=synthetic_jpeg(1 if self.same else self.n)
         return e.Capture(data,self.t,str(self.n) if self.trusted else None)
     async def screen(self, frame, ctx): self.called.append('screen'); return self.result
     async def compare(self, frames, ctx): self.called.append('compare'); return [self.result]*3
@@ -139,7 +138,7 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('pause',f.called)
 
     async def test_frame_failure_reasons_do_not_require_or_expose_real_images(self):
-        jpeg = b'\xff\xd8example\xff\xd9'
+        jpeg = synthetic_jpeg()
         cases = [
             (None, 'missing_frame'),
             (e.Capture('synthetic-private-bytes', 0), 'invalid_frame_bytes'),
@@ -157,7 +156,7 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
                 f = Fake()
                 async def capture(value=frame): return value
                 f.capture = capture
-                monitor = f.monitor(max_frame_bytes=24)
+                monitor = f.monitor(max_frame_bytes=len(jpeg)*2)
                 self.assertEqual(await monitor.run(), 'unavailable_or_error')
                 self.assertEqual(monitor.last_error, {
                     'phase': 'frame_validation', 'category': 'invalid_data', 'reason': reason,

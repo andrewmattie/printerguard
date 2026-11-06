@@ -2,6 +2,7 @@
 from pathlib import Path
 import sys
 import time
+import threading
 import types
 import unittest
 from types import SimpleNamespace
@@ -66,6 +67,62 @@ class FrameValidationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(monitor.last_error,{
                     'phase':'frame_validation','category':'invalid_data','reason':'invalid_jpeg_markers',
                 })
+
+    async def test_marker_only_and_truncated_scan_header_never_reach_ai(self):
+        for content in (b'\xff\xd8\xff\xd9', b'\xff\xd8private decoder payload\xff\xd9',
+                        synthetic_jpeg()[:-4]+b'\xff\xd9'):
+            with self.subTest(length=len(content)):
+                with patch.dict(sys.modules,{'homeassistant.components.camera':self.camera_module(content)}):
+                    monitor=self.monitor()
+                    self.assertEqual(await monitor.run(),'unavailable_or_error')
+                self.assertEqual(monitor.last_error,{
+                    'phase':'frame_validation','category':'invalid_data','reason':'invalid_jpeg_data',
+                })
+                self.assertNotIn('private',str(monitor.last_error))
+
+    async def test_dimension_and_pixel_limits_precede_decode(self):
+        for width,height,reason in ((4097,8,'frame_dimensions_exceeded'),
+                                    (8,4097,'frame_dimensions_exceeded'),
+                                    (4096,4096,'frame_pixel_limit_exceeded')):
+            with self.subTest(width=width,height=height):
+                module=self.camera_module(synthetic_jpeg(width=width,height=height))
+                with patch.dict(sys.modules,{'homeassistant.components.camera':module}):
+                    monitor=self.monitor()
+                    self.assertEqual(await monitor.run(),'unavailable_or_error')
+                self.assertEqual(monitor.last_error['reason'],reason)
+
+    async def test_supported_jpeg_modes_and_limit_boundary_decode(self):
+        from PIL import Image
+        from io import BytesIO
+        for mode,size,options in (('RGB',(16,16),{}),('L',(4096,8),{}),('RGB',(16,16),{'progressive':True})):
+            with self.subTest(mode=mode,size=size,options=options):
+                data=BytesIO()
+                Image.new(mode,size).save(data,format='JPEG',**options)
+                module=self.camera_module(data.getvalue())
+                with patch.dict(sys.modules,{'homeassistant.components.camera':module}):
+                    frame=await self.monitor().get_frame(set())
+                self.assertEqual(frame.content,data.getvalue())
+
+    async def test_decode_delay_cannot_send_an_old_receipt_to_ai(self):
+        from test_engine import Fake
+        fake=Fake()
+        def delayed_decode(content): fake.t+=6
+        with patch('p1s_guard.engine.verify_jpeg',delayed_decode):
+            monitor=fake.monitor()
+            self.assertEqual(await monitor.run(),'unavailable_or_error')
+        self.assertEqual(monitor.last_error['reason'],'stale_capture')
+        self.assertNotIn('screen',fake.called)
+
+    async def test_decoding_runs_off_the_event_loop(self):
+        from p1s_guard.frame_validation import verify_jpeg
+        main_thread=threading.get_ident(); worker_threads=[]
+        def verify(content):
+            worker_threads.append(threading.get_ident())
+            return verify_jpeg(content)
+        with patch.dict(sys.modules,{'homeassistant.components.camera':self.camera_module(synthetic_jpeg())}), patch('p1s_guard.engine.verify_jpeg',verify):
+            await self.monitor().get_frame(set())
+        self.assertEqual(len(worker_threads),1)
+        self.assertNotEqual(worker_threads[0],main_thread)
 
     async def test_non_jpeg_declared_format_stays_rejected(self):
         for content_type in ('image/png','image/jpg','image/jpeg; charset=binary'):
