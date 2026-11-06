@@ -245,3 +245,6 @@ p1s_guard_tmp_*/
 *.gcode
 *.3mf
 *.stl
+
+# Internal
+docs/internal/
