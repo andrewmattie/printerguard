@@ -22,7 +22,7 @@ class Fake:
     async def compare(self, frames, ctx): self.called.append('compare'); return [self.result]*3
     async def reserve(self,task,start): self.called.append('reserve'); return True
     async def pause(self): self.called.append('pause'); self.status='pause'
-    async def notify(self,msg): self.called.append(('notify',msg));
+    async def notify(self,msg,context): self.called.append(('notify',msg));
     def monitor(self, **kwargs):
         return e.Monitor(capture=self.capture,screen=self.screen,compare=self.compare,context=self.ctx,reserve=self.reserve,pause=self.pause,notify=self.notify,clock=self.clock,sleep=self.sleep,**kwargs)
 
@@ -100,7 +100,7 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(m.last_error,{'phase':'ai_other','category':'other'})
     async def test_hung_notification_times_out_and_next_check_can_run(self):
         f=Fake(); started=asyncio.Event(); active=[0]
-        async def hung(_):
+        async def hung(*_):
             active[0]+=1; started.set()
             try: await asyncio.Event().wait()
             finally: active[0]-=1
@@ -112,7 +112,7 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await asyncio.wait_for(task,0.5),'unavailable_or_error')
         self.assertEqual(monitor.last_error,{'phase':'notification','category':'timeout'})
         self.assertFalse(monitor.lock.locked()); self.assertEqual(active[0],0)
-        async def delivered(message): f.called.append(('notify',message))
+        async def delivered(message,context): f.called.append(('notify',message))
         monitor.notify=delivered
         self.assertEqual(await monitor.run(),'monitor_only')
         self.assertFalse(monitor.lock.locked())
@@ -120,7 +120,7 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancel_during_notification_releases_lock_and_callback(self):
         f=Fake(); started=asyncio.Event(); cancelled=asyncio.Event()
-        async def hung(_):
+        async def hung(*_):
             started.set()
             try: await asyncio.Event().wait()
             finally: cancelled.set()
@@ -132,7 +132,7 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
 
     async def test_notification_error_has_safe_phase(self):
         f=Fake()
-        async def notify(_): raise OSError('private payload')
+        async def notify(*_): raise OSError('private payload')
         f.notify=notify; m=f.monitor()
         self.assertEqual(await m.run(),'unavailable_or_error')
         self.assertEqual(m.last_error,{'phase':'notification','category':'os_error'})

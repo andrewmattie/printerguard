@@ -147,11 +147,56 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as d:
             h=Hass(); runtime=Runtime(h,Path(d),Latch(FakeStore()),SETTINGS)
             p,a=runtime.jobs.values()
-            await p.notify('check'); await p.notify('repeat'); await a.notify('check')
+            from test_engine import Fake
+            context=Fake().ctx()
+            with patch('p1s_guard.context_from_states',return_value=context):
+                await p.notify('check',context); await p.notify('repeat',context); await a.notify('check',context)
             self.assertEqual(len(h.services.calls),2)
             self.assertTrue(all(call[0][:2] == ('notify','example_phone') for call in h.services.calls))
             titles=[c[0][2]['title'] for c in h.services.calls]
             self.assertEqual(titles,['Printer One print check','Printer Two print check'])
+
+    async def test_notification_cooldown_is_scoped_to_validated_job(self):
+        from dataclasses import replace
+        from test_engine import Fake
+        context=Fake().ctx()
+        calls=[]
+        async def call(*args,**kwargs): calls.append(args)
+        with tempfile.TemporaryDirectory() as directory:
+            hass=SimpleNamespace(services=SimpleNamespace(async_call=call),states={})
+            runtime=Runtime(hass,Path(directory),Latch(FakeStore()),SETTINGS)
+            notify=next(iter(runtime.jobs.values())).notify
+            with patch('p1s_guard.context_from_states',return_value=context), patch('p1s_guard.time.monotonic',return_value=100):
+                self.assertEqual(await notify('first',context),'submitted')
+                self.assertEqual(await notify('repeat',context),'suppressed_cooldown')
+            # Returning from a temporary guard-state transition is the same job.
+            resumed=replace(context,running_epoch='resumed',guard_epoch=('new',))
+            with patch('p1s_guard.context_from_states',return_value=resumed), patch('p1s_guard.time.monotonic',return_value=200):
+                self.assertEqual(await notify('same job',resumed),'suppressed_cooldown')
+                self.assertEqual(await notify('outdated assessment',context),'suppressed_session')
+            next_job=replace(context,start='next start')
+            with patch('p1s_guard.context_from_states',return_value=next_job), patch('p1s_guard.time.monotonic',return_value=200):
+                self.assertEqual(await notify('new job',next_job),'submitted')
+                self.assertEqual(await notify('repeat',next_job),'suppressed_cooldown')
+            invalid=replace(next_job,task='unknown')
+            with patch('p1s_guard.context_from_states',return_value=invalid):
+                self.assertEqual(await notify('invalid job',invalid),'suppressed_session')
+            self.assertEqual(len(calls),2)
+            self.assertEqual(len(runtime.last_notice),1)
+            with patch('p1s_guard.context_from_states',return_value=next_job), patch('p1s_guard.time.monotonic',return_value=2001):
+                self.assertEqual(await notify('cooldown elapsed',next_job),'submitted')
+
+    async def test_failed_notification_does_not_start_cooldown(self):
+        from test_engine import Fake
+        context=Fake().ctx()
+        async def fail(*args,**kwargs): raise OSError('private details')
+        with tempfile.TemporaryDirectory() as directory:
+            hass=SimpleNamespace(services=SimpleNamespace(async_call=fail),states={})
+            runtime=Runtime(hass,Path(directory),Latch(FakeStore()),SETTINGS)
+            with patch('p1s_guard.context_from_states',return_value=context):
+                with self.assertRaises(OSError):
+                    await next(iter(runtime.jobs.values())).notify('check',context)
+            self.assertEqual(runtime.last_notice,{})
 
     async def test_diagnostic_classification_and_isolation(self):
         self.assertEqual(diagnostic_outcome('screen_clear_or_unjudgeable'),'screen_success')
@@ -228,7 +273,7 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         from test_engine import Fake
         first=Fake(); second=Fake(); second.result={'judgeable':True,'score':0.1,'evidence':'clear'}
         started=asyncio.Event()
-        async def hung(_):
+        async def hung(*_):
             started.set()
             await asyncio.Event().wait()
         first.notify=hung
@@ -246,7 +291,7 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(runtime.diagnostics[names[0]]['failure_phase'],'notification')
             self.assertEqual(runtime.diagnostics[names[0]]['failure_category'],'timeout')
             self.assertEqual(runtime.diagnostics[names[1]]['outcome'],'screen_success')
-            async def delivered(message): first.called.append(('notify',message))
+            async def delivered(message,context): first.called.append(('notify',message))
             monitor.notify=delivered
             runtime.tick(None)
             await asyncio.wait_for(asyncio.gather(*tuple(runtime.tasks)),0.5)

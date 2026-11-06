@@ -54,12 +54,20 @@ class Runtime:
             def context(p=printer): return context_from_states(hass.states,p)
             async def reserve(task,start,p=printer): return await latch.reserve(p.prefix,task,start)
             async def pause(): raise RuntimeError('automatic pause is disabled')
-            async def notify(message,p=printer):
+            async def notify(message,expected,p=printer):
+                current=context_from_states(hass.states,p)
+                if not current.eligible or current.session != expected.session:
+                    return 'suppressed_session'
                 now=time.monotonic()
-                if now-self.last_notice.get(p.prefix,float('-inf')) < 1800: return
+                previous=self.last_notice.get(p.prefix)
+                if previous is not None and previous[0] == expected.job and now-previous[1] < 1800:
+                    return 'suppressed_cooldown'
                 await hass.services.async_call('notify',settings.notify_service.split('.',1)[1],
                     {'title':f'{p.name} print check', 'message':message},blocking=True)
-                self.last_notice[p.prefix]=now
+                # Keep one bounded entry per printer. A different validated job
+                # must receive its first alert even within the previous cooldown.
+                self.last_notice[p.prefix]=(expected.job,now)
+                return 'submitted'
             self.jobs[printer.prefix]=Monitor(capture=capture,screen=ai.screen,compare=ai.compare,
                 context=context,reserve=reserve,pause=pause,notify=notify,clock=time.monotonic,allow_pause=False,
                 ai_phase=lambda adapter=ai: adapter.diagnostic_phase)
