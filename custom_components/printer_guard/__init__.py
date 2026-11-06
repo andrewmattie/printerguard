@@ -13,7 +13,7 @@ from .ha_runtime import camera_capture, context_from_states
 from .latch import Latch
 from .media import Staging
 
-DOMAIN='p1s_guard'
+DOMAIN='printer_guard'
 _LOGGER=logging.getLogger(__name__)
 
 def _config_schema(config):
@@ -23,7 +23,7 @@ def _config_schema(config):
         try:
             parse_config(config[DOMAIN])
         except ValueError:
-            error=probatio.Invalid('Invalid p1s_guard configuration; see the repository README')
+            error=probatio.Invalid('Invalid printer_guard configuration; see the repository README')
             error.secret=True  # HA's error formatter otherwise echoes the full YAML value.
             raise error from None
     return config
@@ -201,7 +201,7 @@ async def async_setup(hass,config):
     try:
         staging=Staging(root)
         await asyncio.to_thread(staging.startup)
-        latch=Latch(Store(hass,1,'p1s_guard.pause_latch'))
+        latch=Latch(Store(hass,1,'printer_guard.pause_latch'))
         await latch.load()
     except Exception as error:
         _LOGGER.error('Printer guard startup cleanup or latch loading failed (%s); monitoring disabled',safe_error_category(error))

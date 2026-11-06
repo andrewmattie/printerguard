@@ -7,8 +7,8 @@ import unittest
 from types import SimpleNamespace
 
 sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'))
-from p1s_guard import ai_task_adapter as mod
-from p1s_guard.media import Staging
+from printer_guard import ai_task_adapter as mod
+from printer_guard.media import Staging
 def staging(root):
     s=Staging(root); s.startup(); return s
 class Bus:

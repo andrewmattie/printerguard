@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'))
-from p1s_guard import engine as e
+from printer_guard import engine as e
 from guard_fixtures import synthetic_jpeg
 
 class Fake:

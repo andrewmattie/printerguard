@@ -10,8 +10,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components'))
-from p1s_guard import Runtime
-from p1s_guard.engine import Capture
+from printer_guard import Runtime
+from printer_guard.engine import Capture
 from guard_fixtures import SETTINGS, synthetic_jpeg
 
 
@@ -97,7 +97,7 @@ class ConcurrentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 monitor.sleep = advance
                 self.assertFalse(monitor.allow_pause)
             tasks = []
-            with patch('p1s_guard.camera_capture', capture):
+            with patch('printer_guard.camera_capture', capture):
                 try:
                     tasks = [asyncio.create_task(runtime.run(name, monitor)) for name, monitor in runtime.jobs.items()]
                     await asyncio.wait_for(entered[1].wait(), 3)
@@ -109,7 +109,7 @@ class ConcurrentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(len(runtime.staging.active), 2)
                         release[3].set()
                     if fail_first:
-                        with self.assertLogs('p1s_guard', level='WARNING'):
+                        with self.assertLogs('printer_guard', level='WARNING'):
                             await asyncio.wait_for(asyncio.gather(*tasks), 3)
                     else:
                         await asyncio.wait_for(asyncio.gather(*tasks), 3)

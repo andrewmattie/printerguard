@@ -47,7 +47,7 @@ def check_hassfest(core):
     environment = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1',
                    'PATH': str(Path(sys.executable).parent) + os.pathsep + os.environ.get('PATH', '')}
     subprocess.run([sys.executable, '-B', '-m', 'script.hassfest', '--core-path', str(site_packages),
-                    '--integration-path', str(ROOT / 'custom_components/p1s_guard')],
+                    '--integration-path', str(ROOT / 'custom_components/printer_guard')],
                    cwd=core, env=environment, check=True)
 
 
@@ -60,10 +60,10 @@ def main():
     import yaml
 
     sys.path.insert(0, str(ROOT / 'custom_components'))
-    from p1s_guard.config import parse_config
+    from printer_guard.config import parse_config
 
-    manifest = json.loads((ROOT / 'custom_components/p1s_guard/manifest.json').read_text())
-    if manifest['domain'] != 'p1s_guard' or not manifest['version']:
+    manifest = json.loads((ROOT / 'custom_components/printer_guard/manifest.json').read_text())
+    if manifest['domain'] != 'printer_guard' or not manifest['version']:
         raise SystemExit('Invalid integration manifest identity or version.')
     required = {'domain', 'name', 'documentation', 'issue_tracker', 'codeowners', 'version'}
     if not required <= manifest.keys():
@@ -72,14 +72,14 @@ def main():
     if not hacs.get('name') or hacs.get('homeassistant') != '2026.10.4':
         raise SystemExit('Invalid HACS display name or supported Home Assistant baseline.')
     from PIL import Image
-    brand = ROOT / 'custom_components/p1s_guard/brand'
+    brand = ROOT / 'custom_components/printer_guard/brand'
     for filename, size in (('icon.png', 256), ('icon@2x.png', 512)):
         with Image.open(brand / filename) as icon:
             if icon.format != 'PNG' or icon.size != (size, size):
                 raise SystemExit(f'Invalid packaged icon: {filename}')
             icon.load()
     example = yaml.safe_load((ROOT / 'examples/configuration.yaml').read_text())
-    parse_config(example['p1s_guard'])
+    parse_config(example['printer_guard'])
     check_public_links()
     with tempfile.TemporaryDirectory(prefix='printguard-check-') as cache:
         environment = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONPYCACHEPREFIX': cache}

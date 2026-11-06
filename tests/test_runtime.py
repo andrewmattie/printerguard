@@ -8,12 +8,12 @@ from unittest.mock import patch
 import types
 
 sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'))
-from p1s_guard import CONFIG_SCHEMA, Runtime, async_setup, diagnostic_outcome
-from p1s_guard.config import parse_config
-from p1s_guard.engine import Capture
+from printer_guard import CONFIG_SCHEMA, Runtime, async_setup, diagnostic_outcome
+from printer_guard.config import parse_config
+from printer_guard.engine import Capture
 from guard_fixtures import SETTINGS, example_config, synthetic_jpeg
-from p1s_guard.latch import Latch
-from p1s_guard.media import MAX_MARKER_SIZE, prepare, recover, Staging
+from printer_guard.latch import Latch
+from printer_guard.media import MAX_MARKER_SIZE, prepare, recover, Staging
 
 def abandoned(root, frames):
     directory, paths, lease = prepare(root, frames)
@@ -72,7 +72,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(list(Path(d).iterdir()),[])
     async def test_recovery_failure_keeps_staging_closed(self):
         with tempfile.TemporaryDirectory() as d:
-            root=Path(d); directory=root/'p1s_guard_tmp_abcdefgh'; directory.mkdir()
+            root=Path(d); directory=root/'printer_guard_tmp_abcdefgh'; directory.mkdir()
             stage=Staging(root)
             with self.assertRaises(ValueError): stage.startup()
             with self.assertRaises(RuntimeError): stage.prepare([SimpleNamespace(content=b'1234')])
@@ -98,10 +98,10 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             modules['homeassistant.helpers.discovery'].async_load_platform=load
             h.async_create_task=asyncio.create_task
             with patch.dict(sys.modules,modules):
-                self.assertTrue(await async_setup(h,{'p1s_guard':example_config()}))
+                self.assertTrue(await async_setup(h,{'printer_guard':example_config()}))
                 await asyncio.sleep(0)
             self.assertEqual(events,[('schedule',60),('stop_listener','stop'),('load',)])
-            await h.data['p1s_guard'].stop(None)
+            await h.data['printer_guard'].stop(None)
             self.assertEqual(events[-1],('unsub',))
     async def test_durable_latch_is_per_printer_and_fail_closed(self):
         store=FakeStore(); latch=Latch(store); await latch.load()
@@ -131,7 +131,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((directory/'other.txt').exists())
     async def test_recovery_does_not_delete_matching_unowned_directory(self):
         with tempfile.TemporaryDirectory() as d:
-            root=Path(d); directory=root/'p1s_guard_tmp_abcdefgh'; directory.mkdir()
+            root=Path(d); directory=root/'printer_guard_tmp_abcdefgh'; directory.mkdir()
             (directory/'frame_1.jpg').write_bytes(b'other')
             with self.assertRaises(ValueError): recover(root)
             self.assertEqual((directory/'frame_1.jpg').read_bytes(),b'other')
@@ -161,7 +161,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             p,a=runtime.jobs.values()
             from test_engine import Fake
             context=Fake().ctx()
-            with patch('p1s_guard.context_from_states',return_value=context):
+            with patch('printer_guard.context_from_states',return_value=context):
                 await p.notify('check',context); await p.notify('repeat',context); await a.notify('check',context)
             self.assertEqual(len(h.services.calls),2)
             self.assertTrue(all(call[0][:2] == ('notify','example_phone') for call in h.services.calls))
@@ -178,24 +178,24 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             hass=SimpleNamespace(services=SimpleNamespace(async_call=call),states={})
             runtime=Runtime(hass,Path(directory),Latch(FakeStore()),SETTINGS)
             notify=next(iter(runtime.jobs.values())).notify
-            with patch('p1s_guard.context_from_states',return_value=context), patch('p1s_guard.time.monotonic',return_value=100):
+            with patch('printer_guard.context_from_states',return_value=context), patch('printer_guard.time.monotonic',return_value=100):
                 self.assertEqual(await notify('first',context),'submitted')
                 self.assertEqual(await notify('repeat',context),'suppressed_cooldown')
             # Returning from a temporary guard-state transition is the same job.
             resumed=replace(context,running_epoch='resumed',guard_epoch=('new',))
-            with patch('p1s_guard.context_from_states',return_value=resumed), patch('p1s_guard.time.monotonic',return_value=200):
+            with patch('printer_guard.context_from_states',return_value=resumed), patch('printer_guard.time.monotonic',return_value=200):
                 self.assertEqual(await notify('same job',resumed),'suppressed_cooldown')
                 self.assertEqual(await notify('outdated assessment',context),'suppressed_session')
             next_job=replace(context,start='next start')
-            with patch('p1s_guard.context_from_states',return_value=next_job), patch('p1s_guard.time.monotonic',return_value=200):
+            with patch('printer_guard.context_from_states',return_value=next_job), patch('printer_guard.time.monotonic',return_value=200):
                 self.assertEqual(await notify('new job',next_job),'submitted')
                 self.assertEqual(await notify('repeat',next_job),'suppressed_cooldown')
             invalid=replace(next_job,task='unknown')
-            with patch('p1s_guard.context_from_states',return_value=invalid):
+            with patch('printer_guard.context_from_states',return_value=invalid):
                 self.assertEqual(await notify('invalid job',invalid),'suppressed_session')
             self.assertEqual(len(calls),2)
             self.assertEqual(len(runtime.last_notice),1)
-            with patch('p1s_guard.context_from_states',return_value=next_job), patch('p1s_guard.time.monotonic',return_value=2001):
+            with patch('printer_guard.context_from_states',return_value=next_job), patch('printer_guard.time.monotonic',return_value=2001):
                 self.assertEqual(await notify('cooldown elapsed',next_job),'submitted')
 
     async def test_failed_notification_does_not_start_cooldown(self):
@@ -205,7 +205,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             hass=SimpleNamespace(services=SimpleNamespace(async_call=fail),states={})
             runtime=Runtime(hass,Path(directory),Latch(FakeStore()),SETTINGS)
-            with patch('p1s_guard.context_from_states',return_value=context):
+            with patch('printer_guard.context_from_states',return_value=context):
                 with self.assertRaises(OSError):
                     await next(iter(runtime.jobs.values())).notify('check',context)
             self.assertEqual(runtime.last_notice,{})
@@ -253,12 +253,12 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         modules['homeassistant.const'].EntityCategory=SimpleNamespace(DIAGNOSTIC='diagnostic')
         modules['homeassistant.core'].callback=lambda function: function
         with patch.dict(sys.modules,modules):
-            sys.modules.pop('p1s_guard.sensor',None)
-            sensor=importlib.import_module('p1s_guard.sensor')
+            sys.modules.pop('printer_guard.sensor',None)
+            sensor=importlib.import_module('printer_guard.sensor')
             with tempfile.TemporaryDirectory() as d:
                 runtime=Runtime(SimpleNamespace(),Path(d),Latch(FakeStore()),SETTINGS)
                 entities=[]
-                hass=SimpleNamespace(data={'p1s_guard':runtime})
+                hass=SimpleNamespace(data={'printer_guard':runtime})
                 await sensor.async_setup_platform(hass,{},entities.extend,{})
                 self.assertEqual(len(entities),2)
                 first, second=entities
@@ -271,7 +271,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(set(first.extra_state_attributes),{'last_check','last_usable_assessment','check_started','assessment','notification','freshness'})
                 async def failure(): return 'unavailable_or_error'
                 detail={'phase':'frame_validation','category':'invalid_data','reason':'duplicate_frame'}
-                with self.assertLogs('p1s_guard',level='WARNING'):
+                with self.assertLogs('printer_guard',level='WARNING'):
                     await runtime.run(first.printer.prefix,SimpleNamespace(run=failure,last_error=detail))
                 self.assertEqual(first.extra_state_attributes['failure_reason'],'duplicate_frame')
                 await runtime.run(first.printer.prefix,SimpleNamespace(run=clear))
@@ -305,7 +305,7 @@ class HealthTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(runtime.diagnostics[name]['last_usable_assessment'],timestamp)
             async def fail(): raise OSError('synthetic-private-camera')
             capture=monitor.capture; monitor.capture=fail
-            with self.assertLogs('p1s_guard',level='WARNING'):
+            with self.assertLogs('printer_guard',level='WARNING'):
                 await runtime.run(name,monitor)
             self.assertEqual(runtime.diagnostics[name]['failure_phase'],'camera_capture')
             self.assertEqual(runtime.diagnostics[name]['last_usable_assessment'],timestamp)
@@ -334,7 +334,7 @@ class HealthTests(unittest.IsolatedAsyncioTestCase):
                 runtime=Runtime(SimpleNamespace(),Path(directory),Latch(FakeStore()),SETTINGS)
                 name=next(iter(runtime.jobs))
                 if status in ('failed','timed_out'):
-                    with self.assertLogs('p1s_guard',level='WARNING'): await runtime.run(name,monitor)
+                    with self.assertLogs('printer_guard',level='WARNING'): await runtime.run(name,monitor)
                 else: await runtime.run(name,monitor)
                 diagnostic=runtime.diagnostics[name]
                 self.assertEqual(diagnostic['notification'],status)
@@ -400,7 +400,7 @@ class HealthTests(unittest.IsolatedAsyncioTestCase):
             monitor=SimpleNamespace(run=failure,last_freshness='private freshness',
                 last_assessment='private assessment',last_notification='private target',
                 last_error={'phase':'private path','category':'private token','reason':'private image'})
-            with self.assertLogs('p1s_guard',level='WARNING'): await runtime.run(name,monitor)
+            with self.assertLogs('printer_guard',level='WARNING'): await runtime.run(name,monitor)
             diagnostic=runtime.diagnostics[name]
             self.assertEqual(diagnostic['failure_phase'],'runtime')
             self.assertEqual(diagnostic['failure_category'],'other')
@@ -445,7 +445,7 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             names=list(runtime.jobs)
             runtime.jobs={names[0]:monitor,names[1]:second.monitor()}
             runtime.started-=121
-            with self.assertLogs('p1s_guard',level='WARNING'):
+            with self.assertLogs('printer_guard',level='WARNING'):
                 runtime.tick(None); await started.wait()
                 await asyncio.wait_for(asyncio.gather(*tuple(runtime.tasks)),0.5)
             self.assertFalse(monitor.lock.locked())
@@ -501,7 +501,7 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             hass=SimpleNamespace(states=states,services=Bus())
             runtime=Runtime(hass,Path(directory),SimpleNamespace(reserve=forbidden),settings)
             runtime.staging.startup()
-            with patch('p1s_guard.camera_capture',capture):
+            with patch('printer_guard.camera_capture',capture):
                 for name,monitor in runtime.jobs.items():
                     monitor.clock=lambda:ticks[0]
                     monitor.sleep=advance
@@ -529,9 +529,9 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         def fail(*args): raise PermissionError('synthetic-private-path-and-token')
         with tempfile.TemporaryDirectory() as directory:
             hass=SimpleNamespace(config=SimpleNamespace(media_dirs={'local':directory}),data={})
-            with patch.dict(sys.modules,modules), patch('p1s_guard.Staging.startup',fail):
-                with self.assertLogs('p1s_guard',level='ERROR') as logs:
-                    self.assertFalse(await async_setup(hass,{'p1s_guard':example_config()}))
+            with patch.dict(sys.modules,modules), patch('printer_guard.Staging.startup',fail):
+                with self.assertLogs('printer_guard',level='ERROR') as logs:
+                    self.assertFalse(await async_setup(hass,{'printer_guard':example_config()}))
             self.assertEqual(hass.data,{})
             self.assertIn('permission',str(logs.output))
             self.assertNotIn('synthetic-private',str(logs.output))
@@ -539,11 +539,11 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_absent_or_invalid_configuration_has_no_startup_side_effects(self):
         self.assertTrue(await async_setup(SimpleNamespace(), {}))
-        with self.assertLogs('p1s_guard', level='ERROR') as logs:
-            self.assertFalse(await async_setup(SimpleNamespace(), {'p1s_guard':None}))
+        with self.assertLogs('printer_guard', level='ERROR') as logs:
+            self.assertFalse(await async_setup(SimpleNamespace(), {'printer_guard':None}))
             config = example_config()
             config['ai_task'] = 'synthetic-private-binding'
-            self.assertFalse(await async_setup(SimpleNamespace(), {'p1s_guard':config}))
+            self.assertFalse(await async_setup(SimpleNamespace(), {'printer_guard':config}))
         self.assertNotIn('synthetic-private-binding', str(logs.output))
 
     def test_yaml_schema_preserves_other_integrations_and_redacts_errors(self):
@@ -551,11 +551,11 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         module = types.ModuleType('probatio')
         module.Invalid = Invalid
         with patch.dict(sys.modules, {'probatio':module}):
-            config = {'p1s_guard':example_config(), 'unrelated':{'value':'keep'}}
+            config = {'printer_guard':example_config(), 'unrelated':{'value':'keep'}}
             self.assertIs(CONFIG_SCHEMA(config), config)
             self.assertEqual(config['unrelated'], {'value':'keep'})
             self.assertEqual(CONFIG_SCHEMA({'unrelated':{}}), {'unrelated':{}})
-            config['p1s_guard']['ai_task'] = 'synthetic-private-binding'
+            config['printer_guard']['ai_task'] = 'synthetic-private-binding'
             with self.assertRaises(Invalid) as result:
                 CONFIG_SCHEMA(config)
             self.assertNotIn('synthetic-private-binding', str(result.exception))
@@ -575,7 +575,7 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             hass = SimpleNamespace(services=Bus(),states={})
             runtime = Runtime(hass,Path(directory),Latch(FakeStore()),SETTINGS)
             runtime.staging.startup()
-            with patch('p1s_guard.camera_capture',capture):
+            with patch('printer_guard.camera_capture',capture):
                 for monitor in runtime.jobs.values():
                     frame = await monitor.capture()
                     await monitor.screen(frame,{})
@@ -610,14 +610,14 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             runtime = Runtime(SimpleNamespace(),Path(directory),Latch(FakeStore()),SETTINGS)
             name = next(iter(runtime.jobs))
             detail = {'phase':'frame_validation','category':'invalid_data','reason':'duplicate_frame'}
-            with self.assertLogs('p1s_guard', level='WARNING') as logs:
+            with self.assertLogs('printer_guard', level='WARNING') as logs:
                 await runtime.run(name,SimpleNamespace(run=failure,last_error=detail))
             self.assertEqual(runtime.diagnostics[name]['failure_reason'],'duplicate_frame')
             self.assertNotIn(name,str(logs.output))
             await runtime.run(name,SimpleNamespace(run=success))
             self.assertNotIn('failure_reason',runtime.diagnostics[name])
             detail['reason'] = 'synthetic-private-data'
-            with self.assertLogs('p1s_guard', level='WARNING'):
+            with self.assertLogs('printer_guard', level='WARNING'):
                 await runtime.run(name,SimpleNamespace(run=failure,last_error=detail))
             self.assertNotIn('failure_reason',runtime.diagnostics[name])
             self.assertNotIn('synthetic-private-data',str(runtime.diagnostics))

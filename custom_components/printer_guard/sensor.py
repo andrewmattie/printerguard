@@ -19,7 +19,7 @@ class GuardDiagnostic(SensorEntity):
         self.runtime=runtime
         self.printer=printer
         self._attr_name=f'{printer.name} Printer Guard'
-        self._attr_unique_id=f'p1s_guard_{printer.prefix}_diagnostic'
+        self._attr_unique_id=f'printer_guard_{printer.prefix}_diagnostic'
 
     @property
     def native_value(self):

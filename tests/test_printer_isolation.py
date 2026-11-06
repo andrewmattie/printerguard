@@ -8,7 +8,7 @@ import types
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components'))
-runtime=importlib.import_module('p1s_guard.ha_runtime')
+runtime=importlib.import_module('printer_guard.ha_runtime')
 from guard_fixtures import SETTINGS
 
 class IsolationTests(unittest.TestCase):

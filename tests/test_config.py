@@ -3,7 +3,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / 'custom_components'))
-from p1s_guard.config import parse_config
+from printer_guard.config import parse_config
 from guard_fixtures import example_config
 
 
