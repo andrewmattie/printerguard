@@ -1,5 +1,7 @@
 """Run local release checks without HA access, provider requests or deployment."""
 from pathlib import Path
+import argparse
+import importlib.metadata
 import json
 import os
 import re
@@ -34,7 +36,25 @@ def check_public_links():
                 raise SystemExit(f'Public link is missing from release files: {document.relative_to(ROOT)} -> {target}')
 
 
+def check_hassfest(core):
+    core = core.resolve()
+    revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=core).decode().strip()
+    if revision != '357cae5c598dfcd7a0ea7dc5b1facccd4ec6037b':
+        raise SystemExit('hassfest requires the pinned Home Assistant Core 2026.10.4 checkout.')
+    if importlib.metadata.version('homeassistant') != '2026.10.4':
+        raise SystemExit('Install requirements-hassfest.txt for the supported HA baseline.')
+    site_packages = importlib.metadata.distribution('homeassistant').locate_file('')
+    environment = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1',
+                   'PATH': str(Path(sys.executable).parent) + os.pathsep + os.environ.get('PATH', '')}
+    subprocess.run([sys.executable, '-B', '-m', 'script.hassfest', '--core-path', str(site_packages),
+                    '--integration-path', str(ROOT / 'custom_components/p1s_guard')],
+                   cwd=core, env=environment, check=True)
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--hassfest-core', type=Path, help='Core 2026.10.4 source checkout for hassfest')
+    arguments = parser.parse_args()
     if os.name != 'posix' or sys.version_info < (3, 14, 2):
         raise SystemExit('Checks require a POSIX host and Python 3.14.2 or newer.')
     import yaml
@@ -58,7 +78,11 @@ def main():
         else:
             print('Git whitespace check skipped: this is not a Git checkout.')
     print('Unit, compilation, manifest JSON, example configuration and public link checks passed.')
-    print('Home Assistant lifecycle, hassfest and supervised live checks are separate.')
+    if arguments.hassfest_core:
+        check_hassfest(arguments.hassfest_core)
+    else:
+        print('hassfest skipped; pass --hassfest-core with the pinned Core checkout to run it.')
+    print('Home Assistant lifecycle and supervised live checks are separate.')
 
 
 if __name__ == '__main__':
