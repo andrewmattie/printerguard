@@ -122,16 +122,27 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(list(root.iterdir()),[])
 
     def test_terminal_record_never_removes_replacement_directory(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary); stage=media.Staging(root); stage.startup()
-            directory,_=stage.prepare([SimpleNamespace(content=b'1234')])
-            with patch.object(media.os,'rmdir',side_effect=OSError('synthetic failure')):
-                with self.assertRaises(OSError): stage.cleanup(directory)
-            stage.active[directory].lease.close()
-            saved=root/'saved_empty'; directory.rename(saved)
-            directory.mkdir(); unrelated=directory/'unrelated.txt'; unrelated.write_text('keep')
-            with self.assertRaises(media.RecoveryError): media.recover(root)
-            self.assertEqual(unrelated.read_text(),'keep'); self.assertTrue(saved.exists())
+        for contents in ({}, {'unrelated.txt': 'keep'}):
+            with self.subTest(empty=not contents), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                stage = media.Staging(root)
+                stage.startup()
+                directory, _ = stage.prepare([SimpleNamespace(content=b'1234')])
+                with patch.object(media.os, 'rmdir', side_effect=OSError('synthetic failure')):
+                    with self.assertRaises(OSError):
+                        stage.cleanup(directory)
+                stage.active[directory].lease.close()
+                saved = root / 'saved_empty'
+                directory.rename(saved)
+                directory.mkdir()
+                for name, text in contents.items():
+                    (directory / name).write_text(text)
+
+                with self.assertRaises(media.RecoveryError):
+                    media.recover(root)
+                self.assertTrue(directory.is_dir())
+                self.assertEqual({path.name: path.read_text() for path in directory.iterdir()}, contents)
+                self.assertTrue(saved.is_dir())
 
     def test_terminal_collision_never_overwrites_an_unrelated_record(self):
         with tempfile.TemporaryDirectory() as temporary:

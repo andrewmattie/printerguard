@@ -33,10 +33,12 @@ class ConfigTests(unittest.TestCase):
             parse_config(config)
 
     def test_entity_domains_and_printer_count_are_validated(self):
+        printers = example_config()['printers']
+        printers.append({'name': 'Printer Three', 'entity_prefix': 'printer_three', 'camera': 'camera.printer_three'})
         for key, values in {
             'ai_task': ('', None, 'camera.example', 'ai_task.', 'ai_task.bad/name'),
             'notify_service': ('', None, 'button.example', 'notify.', 'notify.bad name'),
-            'printers': ([], 'printer_one', {}, example_config()['printers'] * 2),
+            'printers': ([], 'printer_one', {}, printers),
         }.items():
             for value in values:
                 config = example_config()

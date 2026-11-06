@@ -34,8 +34,6 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(f.n,3); self.assertNotIn('pause',f.called); self.assertEqual(f.t,60)
     async def test_untrusted_cannot_pause_even_if_armed(self):
         f=Fake(); self.assertEqual(await f.monitor(allow_pause=True).run(),'monitor_only'); self.assertNotIn('pause',f.called)
-    async def test_duplicate_aborts(self):
-        f=Fake(); f.same=True; self.assertEqual(await f.monitor().run(),'unavailable_or_error'); self.assertNotIn('compare',f.called)
     async def test_stage_change_aborts(self):
         f=Fake()
         async def s(n): f.t+=n; f.stage='changing_filament'
@@ -223,6 +221,52 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('synthetic-private-data', str(result.exception))
 
 class FreshnessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_each_comparison_gap_must_be_between_15_and_75_seconds(self):
+        for gaps, captures, expected in (
+            ((14, 30), 2, 'stale_gap'),
+            ((30, 14), 3, 'stale_gap'),
+            ((15, 75), 3, 'paused_confirmed'),
+            ((75, 15), 3, 'paused_confirmed'),
+            ((76, 30), 2, 'stale_gap'),
+            ((30, 76), 3, 'stale_gap'),
+        ):
+            with self.subTest(gaps=gaps):
+                fake = Fake()
+                fake.trusted = True
+                delays = iter(gaps)
+
+                async def advance_clock(_):
+                    fake.t += next(delays)
+
+                fake.sleep = advance_clock
+                monitor = fake.monitor(allow_pause=True)
+                self.assertEqual(await monitor.run(), expected)
+                self.assertEqual(fake.n, captures)
+                if expected == 'stale_gap':
+                    self.assertEqual(fake.called, ['screen'])
+                    self.assertFalse(monitor.assessment_usable)
+
+    async def test_screen_and_comparison_expire_after_inference_timeout_plus_five_seconds(self):
+        inference_timeout = 20
+        for phase, calls in (('screen', ['screen']), ('compare', ['screen', 'compare'])):
+            for age, expected in ((25, 'paused_confirmed'), (26, 'stale_result')):
+                with self.subTest(phase=phase, age=age):
+                    fake = Fake()
+                    fake.trusted = True
+                    assess = getattr(fake, phase)
+
+                    async def delayed(*args):
+                        result = await assess(*args)
+                        fake.t += age
+                        return result
+
+                    setattr(fake, phase, delayed)
+                    monitor = fake.monitor(allow_pause=True, inference_timeout=inference_timeout)
+                    self.assertEqual(await monitor.run(), expected)
+                    if expected == 'stale_result':
+                        self.assertEqual(fake.called, calls)
+                        self.assertFalse(monitor.assessment_usable)
+
     async def test_static_view_is_assessed_but_never_reported_as_fresh(self):
         fake=Fake(); fake.same=True
         fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
