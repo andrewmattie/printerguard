@@ -1,0 +1,20 @@
+# Fictitious bindings only. Replace these in your private HA configuration.
+# Merge this section with your existing configuration; do not overwrite it.
+p1s_guard:
+  ai_task: ai_task.example_vision
+  notify_service: notify.example_phone
+  printers:
+    - name: Printer One
+      entity_prefix: printer_one
+      camera: camera.printer_one
+    - name: Printer Two
+      entity_prefix: printer_two
+      camera: camera.printer_two
+
+# The HA process also needs an existing, writable absolute media directory under
+# homeassistant.media_dirs.local. For example, merge this mapping if appropriate:
+# homeassistant:
+#   media_dirs:
+#     local: /media
+# Preserve any other media_dirs mappings you need. /media must exist in HA's own
+# filesystem/container, and this may make its contents available in HA Media.

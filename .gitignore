@@ -218,3 +218,30 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local Home Assistant configuration, runtime state and private captures
+.DS_Store
+.env.*
+!.env.example
+/configuration.yaml
+/configuration.yml
+/secrets.yaml
+/secrets.yml
+.storage/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3*
+/media/
+/www/
+/backups/
+p1s_guard_tmp_*/
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+*.mp4
+*.gcode
+*.3mf
+*.stl
