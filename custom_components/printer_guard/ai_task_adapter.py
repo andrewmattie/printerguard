@@ -38,7 +38,6 @@ class AITaskAdapter:
         self.hass = hass
         self.entity_id = entity_id
         self.staging = staging
-        self.media_root = staging.root
         self.diagnostic_phase = 'ai_prepare'
 
     async def _cleanup(self, directory):
@@ -67,7 +66,7 @@ class AITaskAdapter:
                 raise cancelled
         try:
             self.diagnostic_phase = 'ai_request_build'
-            attachments=[{'media_content_id':'media-source://media_source/local/'+str(p.relative_to(self.media_root)), 'media_content_type':'image/jpeg'} for p in paths]
+            attachments=[{'media_content_id':'media-source://media_source/local/'+str(p.relative_to(directory.parent)), 'media_content_type':'image/jpeg'} for p in paths]
             structure={f'frame_{n}_{k}': v for n in range(1,len(frames)+1) for k,v in FIELD.items()}
             question = ('Compare these three ordered still photographs of the same print. '
                         'Assess each frame independently; do not infer unobserved motion. '

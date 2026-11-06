@@ -109,6 +109,26 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                     self.assertIs(bus.structure[name]['required'], True, name)
                     self.assertEqual(bus.structure[name]['selector'], selector, name)
                 self.assertEqual(list(root.iterdir()), [])
+
+    async def test_symlink_media_source_resolves_attachments_and_cleans_each_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'target'
+            target.mkdir()
+            unrelated = target / 'unrelated.txt'
+            unrelated.write_text('keep')
+            root = Path(directory) / 'local'
+            root.symlink_to(target, target_is_directory=True)
+            bus = Bus(root)
+            stage = staging(root)
+            adapter = mod.AITaskAdapter(SimpleNamespace(services=bus), 'ai_task.example', stage)
+
+            for content in (b'1111', b'2222'):
+                await adapter.screen(SimpleNamespace(content=content), {})
+                self.assertEqual(bus.contents, [content])
+                self.assertEqual(list(target.iterdir()), [unrelated])
+                self.assertEqual(stage.active, {})
+            self.assertEqual(unrelated.read_text(), 'keep')
+
     async def test_cleanup_after_error(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); bus=Bus(root,True); a=mod.AITaskAdapter(SimpleNamespace(services=bus),'ai_task.example',staging(root))

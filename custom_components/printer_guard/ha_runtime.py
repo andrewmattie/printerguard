@@ -1,8 +1,9 @@
 """Home Assistant camera and state adapters for configured printers."""
 from __future__ import annotations
+import asyncio
 import time
 from .config import Printer
-from .engine import MAX_FRAME_BYTES, Capture, Context, FrameValidationError
+from .engine import CAPTURE_TIMEOUT, MAX_FRAME_BYTES, Capture, Context, FrameValidationError
 
 def context_from_states(states, printer: Printer) -> Context:
     def entity(domain, suffix): return printer.entity(domain, suffix)
@@ -32,7 +33,15 @@ def context_from_states(states, printer: Printer) -> Context:
 async def camera_capture(hass, printer: Printer) -> Capture:
     """Fetch this printer's image. This is not proof of source freshness."""
     from homeassistant.components.camera import async_get_image
-    image=await async_get_image(hass, printer.camera)
+    task = asyncio.current_task()
+    cancelling = task.cancelling()
+    try:
+        image = await async_get_image(hass, printer.camera, timeout=CAPTURE_TIMEOUT)
+    except Exception:
+        # HA can replace caller cancellation with a generic camera error.
+        if task.cancelling() > cancelling:
+            raise asyncio.CancelledError from None
+        raise
     if image.content_type != 'image/jpeg': raise FrameValidationError('unsupported_image_format')
     content=image.content
     # Bambu's camera returns a mutable bytearray. Freeze that known buffer type
