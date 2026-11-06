@@ -110,7 +110,7 @@ class FrameValidationTests(unittest.IsolatedAsyncioTestCase):
         with patch('p1s_guard.engine.verify_jpeg',delayed_decode):
             monitor=fake.monitor()
             self.assertEqual(await monitor.run(),'unavailable_or_error')
-        self.assertEqual(monitor.last_error['reason'],'stale_capture')
+        self.assertEqual(monitor.last_error['reason'],'stale_receipt')
         self.assertNotIn('screen',fake.called)
 
     async def test_decoding_runs_off_the_event_loop(self):

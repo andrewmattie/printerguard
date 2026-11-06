@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import math
 from dataclasses import dataclass
+from collections import deque
 from typing import Any
 from .frame_validation import verify_jpeg
 
@@ -40,14 +41,15 @@ class Context:
 @dataclass(frozen=True)
 class Capture:
     content: bytes
-    captured_at: float
+    # Monotonic local receipt time; never a claim about source capture time.
+    received_at: float
     # Only a trusted capture-source sequence can set this. A hash isn't freshness proof.
     source_frame_id: str | None = None
 
 FRAME_FAILURE_REASONS = frozenset({
     'missing_frame', 'invalid_frame_bytes', 'frame_too_small', 'frame_too_large',
-    'invalid_jpeg_markers', 'invalid_capture_timestamp', 'future_capture',
-    'stale_capture', 'duplicate_frame', 'unsupported_image_format',
+    'invalid_jpeg_markers', 'invalid_receipt_timestamp', 'future_receipt',
+    'stale_receipt', 'duplicate_frame', 'unsupported_image_format',
     'invalid_jpeg_data', 'frame_dimensions_exceeded', 'frame_pixel_limit_exceeded',
 })
 
@@ -116,6 +118,19 @@ class Monitor:
         self.ai_phase = ai_phase
         self.last_error = None
         self.notification_timeout = notification_timeout
+        self.recent_frames = deque(maxlen=8)
+        self.history_job = None
+        self.last_freshness = 'not_checked'
+
+    def remember_frame(self, frame):
+        """Track possible repeated input without persisting pixels or hashes."""
+        digest = hashlib.sha256(frame.content).digest()
+        repeated = digest in self.recent_frames
+        if not repeated:
+            self.recent_frames.append(digest)
+        if repeated:
+            self.last_freshness = 'suspected_stale'
+        return repeated
 
     async def send_notice(self, message, context):
         try:
@@ -141,20 +156,21 @@ class Monitor:
             raise FrameValidationError('frame_too_large')
         if not (f.content.startswith(b'\xff\xd8') and f.content.endswith(b'\xff\xd9')):
             raise FrameValidationError('invalid_jpeg_markers')
-        if type(f.captured_at) not in (int, float) or not math.isfinite(f.captured_at):
-            raise FrameValidationError('invalid_capture_timestamp')
-        age = self.clock() - f.captured_at
+        if type(f.received_at) not in (int, float) or not math.isfinite(f.received_at):
+            raise FrameValidationError('invalid_receipt_timestamp')
+        age = self.clock() - f.received_at
         if age < 0:
-            raise FrameValidationError('future_capture')
+            raise FrameValidationError('future_receipt')
         if age > 5:
-            raise FrameValidationError('stale_capture')
+            raise FrameValidationError('stale_receipt')
         reason = await asyncio.to_thread(verify_jpeg, f.content)
         if reason is not None:
             raise FrameValidationError(reason)
-        if self.clock() - f.captured_at > 5:
-            raise FrameValidationError('stale_capture')
+        if self.clock() - f.received_at > 5:
+            raise FrameValidationError('stale_receipt')
         digest = hashlib.sha256(f.content).hexdigest()
         if digest in seen:
+            self.last_freshness = 'suspected_stale'
             raise FrameValidationError('duplicate_frame')
         seen.add(digest)
         return f
@@ -165,23 +181,32 @@ class Monitor:
         async with self.lock:
             frames: list[Capture] = []
             self.last_error = None
+            self.last_freshness = 'not_checked'
             phase = 'context'
             try:
                 initial = self.context()
                 if not initial.eligible:
                     return 'ineligible'
+                self.last_freshness = 'unknown'
+                if initial.job != self.history_job:
+                    self.recent_frames.clear()
+                    self.history_job = initial.job
                 seen: set[str] = set()
                 phase = 'camera_capture'
                 f = await self.get_frame(seen); frames.append(f)
                 phase = 'session_check'
                 if not self.same_session(initial): return 'session_changed'
+                repeated = self.remember_frame(f)
                 phase = 'screen_ai'
                 first_raw = await asyncio.wait_for(self.screen(f, initial.telemetry), self.inference_timeout)
                 phase = 'screen_verdict'
                 first = verdict(first_raw)
                 phase = 'session_check'
                 if not self.same_session(initial): return 'session_changed'
-                if self.clock() - f.captured_at > self.inference_timeout + 5: return 'stale_result'
+                if self.clock() - f.received_at > self.inference_timeout + 5: return 'stale_result'
+                # Static scenes still receive an advisory assessment. Repeated
+                # bytes cannot refresh usable health or escalate to an alert.
+                if repeated: return 'repeated_view'
                 if not suspicious(first): return 'screen_clear_or_unjudgeable'
                 for _ in range(2):
                     await self.sleep(self.interval)
@@ -189,14 +214,15 @@ class Monitor:
                     phase = 'camera_capture'
                     f = await self.get_frame(seen)
                     phase = 'session_check'
-                    if not 15 <= f.captured_at - frames[-1].captured_at <= 75: return 'stale_gap'
+                    if not 15 <= f.received_at - frames[-1].received_at <= 75: return 'stale_gap'
+                    if self.remember_frame(f): return 'repeated_view'
                     frames.append(f)
                 if not self.same_session(initial): return 'session_changed'
                 phase = 'comparison_ai'
                 raw = await asyncio.wait_for(self.compare(frames, initial.telemetry), self.inference_timeout)
                 phase = 'comparison_verdict'
                 if not self.same_session(initial): return 'session_changed'
-                if self.clock() - frames[-1].captured_at > self.inference_timeout + 5: return 'stale_result'
+                if self.clock() - frames[-1].received_at > self.inference_timeout + 5: return 'stale_result'
                 if not isinstance(raw, list) or len(raw) != 3:
                     raise ValueError('invalid comparison shape')
                 assessments = [verdict(x) for x in raw]

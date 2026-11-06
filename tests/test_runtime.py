@@ -427,6 +427,21 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(hass.services.calls),2)
             self.assertEqual(list(Path(directory).iterdir()),[])
 
+    async def test_repeated_view_is_degraded_and_diagnostics_never_include_hashes(self):
+        from test_engine import Fake
+        fake=Fake(); fake.same=True
+        fake.result={'judgeable':True,'score':0.1,'evidence':'synthetic private assessment'}
+        with tempfile.TemporaryDirectory() as directory:
+            runtime=Runtime(SimpleNamespace(),Path(directory),Latch(FakeStore()),SETTINGS)
+            name=next(iter(runtime.jobs)); monitor=fake.monitor()
+            await runtime.run(name,monitor)
+            self.assertEqual(runtime.diagnostics[name]['freshness'],'unknown')
+            await runtime.run(name,monitor)
+            self.assertEqual(runtime.diagnostics[name]['outcome'],'degraded')
+            self.assertEqual(runtime.diagnostics[name]['freshness'],'suspected_stale')
+            self.assertNotIn('private',str(runtime.diagnostics))
+            self.assertTrue(all(digest.hex() not in str(runtime.diagnostics) for digest in monitor.recent_frames))
+
     async def test_failure_reason_is_allowlisted_and_cleared_after_success(self):
         async def failure(): return 'unavailable_or_error'
         async def success(): return 'screen_clear_or_unjudgeable'

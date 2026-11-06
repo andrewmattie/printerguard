@@ -145,11 +145,11 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
             (e.Capture(b'x', 0), 'frame_too_small'),
             (e.Capture(jpeg * 3, 0), 'frame_too_large'),
             (e.Capture(b'synthetic-private-bytes', 0), 'invalid_jpeg_markers'),
-            (e.Capture(jpeg, float('nan')), 'invalid_capture_timestamp'),
-            (e.Capture(jpeg, float('inf')), 'invalid_capture_timestamp'),
-            (e.Capture(jpeg, 'synthetic-private-time'), 'invalid_capture_timestamp'),
-            (e.Capture(jpeg, 1), 'future_capture'),
-            (e.Capture(jpeg, -6), 'stale_capture'),
+            (e.Capture(jpeg, float('nan')), 'invalid_receipt_timestamp'),
+            (e.Capture(jpeg, float('inf')), 'invalid_receipt_timestamp'),
+            (e.Capture(jpeg, 'synthetic-private-time'), 'invalid_receipt_timestamp'),
+            (e.Capture(jpeg, 1), 'future_receipt'),
+            (e.Capture(jpeg, -6), 'stale_receipt'),
         ]
         for frame, reason in cases:
             with self.subTest(reason=reason):
@@ -177,6 +177,75 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError) as result:
             e.FrameValidationError('synthetic-private-data')
         self.assertNotIn('synthetic-private-data', str(result.exception))
+
+class FreshnessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_static_view_is_assessed_but_never_reported_as_fresh(self):
+        fake=Fake(); fake.same=True
+        fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
+        monitor=fake.monitor()
+        self.assertEqual(await monitor.run(),'screen_clear_or_unjudgeable')
+        self.assertEqual(monitor.last_freshness,'unknown')
+        self.assertEqual(await monitor.run(),'repeated_view')
+        self.assertEqual(monitor.last_freshness,'suspected_stale')
+        self.assertEqual(fake.called.count('screen'),2)
+        self.assertNotIn('compare',fake.called)
+        self.assertEqual(len(monitor.recent_frames),1)
+
+    async def test_repeated_suspicious_view_cannot_escalate(self):
+        fake=Fake(); fake.same=True
+        fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
+        monitor=fake.monitor(); await monitor.run()
+        fake.result={'judgeable':True,'score':0.9,'evidence':'suspicious'}
+        self.assertEqual(await monitor.run(),'repeated_view')
+        self.assertNotIn('compare',fake.called)
+        self.assertFalse(any(isinstance(call,tuple) for call in fake.called))
+        self.assertNotIn('pause',fake.called)
+
+    async def test_history_is_bounded_and_new_bytes_do_not_prove_freshness(self):
+        fake=Fake(); fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
+        monitor=fake.monitor()
+        for _ in range(20):
+            self.assertEqual(await monitor.run(),'screen_clear_or_unjudgeable')
+            self.assertEqual(monitor.last_freshness,'unknown')
+        self.assertEqual(len(monitor.recent_frames),8)
+
+    async def test_new_job_clears_history_and_printers_are_independent(self):
+        first=Fake(); second=Fake()
+        for fake in (first,second):
+            fake.same=True; fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
+        a=first.monitor(); b=second.monitor()
+        await a.run(); self.assertEqual(await a.run(),'repeated_view')
+        self.assertEqual(await b.run(),'screen_clear_or_unjudgeable')
+        first.job='next job'
+        self.assertEqual(await a.run(),'screen_clear_or_unjudgeable')
+        self.assertEqual(a.last_freshness,'unknown')
+        self.assertEqual(len(a.recent_frames),1)
+
+    async def test_new_image_recovers_after_repeated_view(self):
+        fake=Fake(); fake.same=True
+        fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
+        monitor=fake.monitor(); await monitor.run()
+        self.assertEqual(await monitor.run(),'repeated_view')
+        fake.same=False
+        self.assertEqual(await monitor.run(),'screen_clear_or_unjudgeable')
+        self.assertEqual(monitor.last_freshness,'unknown')
+        self.assertIsNone(monitor.last_error)
+
+    async def test_previous_check_image_in_comparison_aborts_alert(self):
+        fake=Fake(); fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
+        monitor=fake.monitor(); await monitor.run()
+        fake.result={'judgeable':True,'score':0.9,'evidence':'suspicious'}
+        capture=fake.capture
+        async def returning():
+            frame=await capture()
+            if fake.n==3: return e.Capture(synthetic_jpeg(1),fake.t)
+            return frame
+        monitor.capture=returning
+        self.assertEqual(await monitor.run(),'repeated_view')
+        self.assertEqual(monitor.last_freshness,'suspected_stale')
+        self.assertNotIn('compare',fake.called)
+        self.assertNotIn('pause',fake.called)
+
 
 class ExtraTests(unittest.IsolatedAsyncioTestCase):
     async def test_intervening_state_transition_aborts(self):
