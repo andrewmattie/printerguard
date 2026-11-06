@@ -398,6 +398,7 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(Invalid) as result:
                 CONFIG_SCHEMA(config)
             self.assertNotIn('synthetic-private-binding', str(result.exception))
+            self.assertTrue(result.exception.secret)
 
     async def test_configured_ai_and_camera_routing_remains_monitor_only(self):
         class Bus:
