@@ -1,10 +1,16 @@
 {
   "domain": "p1s_guard",
   "name": "Printer Guard (experimental)",
-  "version": "0.1.0",
-  "documentation": "https://github.com/andrewmattie/printguard",
-  "requirements": [],
   "codeowners": [],
+  "dependencies": [
+    "ai_task",
+    "camera",
+    "media_source",
+    "notify"
+  ],
+  "documentation": "https://github.com/andrewmattie/printguard",
   "integration_type": "service",
-  "iot_class": "cloud_polling"
+  "iot_class": "cloud_polling",
+  "requirements": [],
+  "version": "0.1.1"
 }
