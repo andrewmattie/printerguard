@@ -8,6 +8,8 @@ from collections import deque
 from typing import Any
 from .frame_validation import verify_jpeg
 
+MAX_FRAME_BYTES = 8_000_000
+
 @dataclass(frozen=True)
 class Context:
     status: str
@@ -108,7 +110,7 @@ class Monitor:
     """
     def __init__(self, *, capture, screen, compare, context, reserve, pause, notify,
                  clock, sleep=asyncio.sleep, allow_pause=False, interval=30.0,
-                 capture_timeout=15.0, inference_timeout=40.0, max_frame_bytes=8_000_000,
+                 capture_timeout=15.0, inference_timeout=40.0, max_frame_bytes=MAX_FRAME_BYTES,
                  ai_phase=lambda: 'ai_service', notification_timeout=10.0, on_started=lambda new_job: None):
         self.capture, self.screen, self.compare, self.context = capture, screen, compare, context
         self.reserve, self.pause, self.notify = reserve, pause, notify

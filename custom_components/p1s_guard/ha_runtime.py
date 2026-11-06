@@ -2,7 +2,7 @@
 from __future__ import annotations
 import time
 from .config import Printer
-from .engine import Capture, Context, FrameValidationError
+from .engine import MAX_FRAME_BYTES, Capture, Context, FrameValidationError
 
 def context_from_states(states, printer: Printer) -> Context:
     def entity(domain, suffix): return printer.entity(domain, suffix)
@@ -34,4 +34,10 @@ async def camera_capture(hass, printer: Printer) -> Capture:
     from homeassistant.components.camera import async_get_image
     image=await async_get_image(hass, printer.camera)
     if image.content_type != 'image/jpeg': raise FrameValidationError('unsupported_image_format')
-    return Capture(image.content,time.monotonic(),None)
+    content=image.content
+    # Bambu's camera returns a mutable bytearray. Freeze that known buffer type
+    # at the adapter boundary; the engine still validates the complete JPEG.
+    if type(content) is bytearray:
+        if len(content) > MAX_FRAME_BYTES: raise FrameValidationError('frame_too_large')
+        content=bytes(content)
+    return Capture(content,time.monotonic(),None)

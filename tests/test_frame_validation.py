@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'))
-from p1s_guard.engine import Context, FrameValidationError, Monitor
+from p1s_guard.engine import MAX_FRAME_BYTES, Context, FrameValidationError, Monitor
 from p1s_guard.ha_runtime import camera_capture
 from guard_fixtures import SETTINGS, synthetic_jpeg
 
@@ -38,6 +38,35 @@ class FrameValidationTests(unittest.IsolatedAsyncioTestCase):
             frame=await self.monitor().get_frame(set())
         self.assertEqual(frame.content,content)
         self.assertIsNone(frame.source_frame_id)
+
+    async def test_mutable_camera_jpeg_is_frozen_before_validation(self):
+        original=synthetic_jpeg()
+        content=bytearray(original)
+        with patch.dict(sys.modules,{'homeassistant.components.camera':self.camera_module(content)}):
+            frame=await self.monitor().get_frame(set())
+        content[:]=b'changed camera buffer'
+        self.assertIs(type(frame.content),bytes)
+        self.assertEqual(frame.content,original)
+        self.assertIsNone(frame.source_frame_id)
+
+    async def test_oversized_mutable_camera_buffer_is_rejected_before_copying(self):
+        module=self.camera_module(bytearray(MAX_FRAME_BYTES+1))
+        with patch.dict(sys.modules,{'homeassistant.components.camera':module}), patch(
+                'p1s_guard.ha_runtime.bytes',side_effect=AssertionError('copy must not run'),create=True):
+            monitor=self.monitor()
+            self.assertEqual(await monitor.run(),'unavailable_or_error')
+        self.assertEqual(monitor.last_error,{
+            'phase':'camera_capture','category':'invalid_data','reason':'frame_too_large',
+        })
+
+    async def test_mutable_camera_buffer_still_requires_a_decodable_jpeg(self):
+        module=self.camera_module(bytearray(b'\xff\xd8synthetic invalid JPEG\xff\xd9'))
+        with patch.dict(sys.modules,{'homeassistant.components.camera':module}):
+            monitor=self.monitor()
+            self.assertEqual(await monitor.run(),'unavailable_or_error')
+        self.assertEqual(monitor.last_error,{
+            'phase':'frame_validation','category':'invalid_data','reason':'invalid_jpeg_data',
+        })
 
     async def test_identical_camera_responses_reproduce_duplicate_frame_failure(self):
         with patch.dict(sys.modules,{'homeassistant.components.camera':self.camera_module(synthetic_jpeg())}):
