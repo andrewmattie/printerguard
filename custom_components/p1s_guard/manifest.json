@@ -1,0 +1,10 @@
+{
+  "domain": "p1s_guard",
+  "name": "Printer Guard (experimental)",
+  "version": "0.1.0",
+  "documentation": "https://github.com/andrewmattie/printguard",
+  "requirements": [],
+  "codeowners": [],
+  "integration_type": "service",
+  "iot_class": "cloud_polling"
+}
