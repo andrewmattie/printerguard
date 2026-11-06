@@ -82,7 +82,10 @@ class AITaskAdapter:
             self.diagnostic_phase = 'ai_response'
             data=response.get('data') if isinstance(response,dict) else None
             if not isinstance(data,dict): raise ValueError('invalid AI response')
-            return [{'judgeable':data.get(f'frame_{n}_judgeable'), 'score':data.get(f'frame_{n}_score'), 'evidence':data.get(f'frame_{n}_evidence')} for n in range(1,len(frames)+1)]
+            return [
+                {key: data.get(f'frame_{n}_{key}') for key in FIELD}
+                for n in range(1, len(frames) + 1)
+            ]
         finally:
             previous_phase = self.diagnostic_phase
             self.diagnostic_phase = 'media_cleanup'

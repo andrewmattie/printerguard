@@ -3,32 +3,43 @@ from __future__ import annotations
 import asyncio
 import time
 from .config import Printer
-from .engine import CAPTURE_TIMEOUT, MAX_FRAME_BYTES, Capture, Context, FrameValidationError
+from .engine import CAPTURE_TIMEOUT, Capture, Context, FrameValidationError
+from .frame_validation import MAX_FRAME_BYTES
 
 def context_from_states(states, printer: Printer) -> Context:
-    def entity(domain, suffix): return printer.entity(domain, suffix)
-    def val(eid):
-        s=states.get(eid)
-        return s.state if s is not None else 'unavailable'
-    status_id=entity('sensor','print_status')
-    stage_id=entity('sensor','current_stage')
-    online_id=entity('binary_sensor','online')
-    error_id=entity('binary_sensor','print_error')
-    task_id=entity('sensor','task_name')
-    start_id=entity('sensor','start_time')
-    status=states.get(status_id)
-    camera=val(printer.camera)
-    guard_epoch=tuple(s.last_changed.isoformat() if (s:=states.get(eid)) is not None else ''
-                      for eid in (status_id, stage_id, online_id, error_id, printer.camera, task_id, start_id))
-    telemetry={k:(None if (v:=val(entity('sensor',suffix))) in ('unavailable','unknown') else v)
-               for k,suffix in {'layer':'current_layer', 'total_layers':'total_layer_count',
-                   'progress':'print_progress','nozzle_temperature':'nozzle_temperature',
-                   'bed_temperature':'bed_temperature'}.items()}
-    return Context(status=val(status_id),stage=val(stage_id),online=val(online_id)=='on',
-                   camera_available=camera not in ('unavailable','unknown','off'),
-                   print_error=val(error_id),task=val(task_id),start=val(start_id),
-                   running_epoch=status.last_changed.isoformat() if status is not None else '',
-                   telemetry=telemetry, guard_epoch=guard_epoch)
+    def val(state):
+        return state.state if state is not None else 'unavailable'
+
+    guard_states = tuple(states.get(entity_id) for entity_id in (
+        printer.entity('sensor', 'print_status'),
+        printer.entity('sensor', 'current_stage'),
+        printer.entity('binary_sensor', 'online'),
+        printer.entity('binary_sensor', 'print_error'),
+        printer.camera,
+        printer.entity('sensor', 'task_name'),
+        printer.entity('sensor', 'start_time'),
+    ))
+    status, stage, online, error, camera, task, start = map(val, guard_states)
+    guard_epoch = tuple(
+        state.last_changed.isoformat() if state is not None else ''
+        for state in guard_states
+    )
+    telemetry = {}
+    for key, suffix in (
+        ('layer', 'current_layer'),
+        ('total_layers', 'total_layer_count'),
+        ('progress', 'print_progress'),
+        ('nozzle_temperature', 'nozzle_temperature'),
+        ('bed_temperature', 'bed_temperature'),
+    ):
+        value = val(states.get(printer.entity('sensor', suffix)))
+        telemetry[key] = None if value in ('unavailable', 'unknown') else value
+    return Context(
+        status=status, stage=stage, online=online == 'on',
+        camera_available=camera not in ('unavailable', 'unknown', 'off'),
+        print_error=error, task=task, start=start, running_epoch=guard_epoch[0],
+        telemetry=telemetry, guard_epoch=guard_epoch,
+    )
 
 async def camera_capture(hass, printer: Printer) -> Capture:
     """Fetch this printer's image. This is not proof of source freshness."""

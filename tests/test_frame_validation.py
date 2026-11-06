@@ -40,7 +40,7 @@ class FrameValidationTests(unittest.IsolatedAsyncioTestCase):
     async def test_complete_synthetic_jpeg_passes_initial_frame_gate(self):
         content=synthetic_jpeg()
         with patch.dict(sys.modules,{'homeassistant.components.camera':self.camera_module(content)}):
-            frame=await self.monitor().get_frame(set())
+            frame, _ = await self.monitor().get_frame(set())
         self.assertEqual(frame.content,content)
         self.assertIsNone(frame.source_frame_id)
 
@@ -89,7 +89,7 @@ class FrameValidationTests(unittest.IsolatedAsyncioTestCase):
         original=synthetic_jpeg()
         content=bytearray(original)
         with patch.dict(sys.modules,{'homeassistant.components.camera':self.camera_module(content)}):
-            frame=await self.monitor().get_frame(set())
+            frame, _ = await self.monitor().get_frame(set())
         content[:]=b'changed camera buffer'
         self.assertIs(type(frame.content),bytes)
         self.assertEqual(frame.content,original)
@@ -129,7 +129,8 @@ class FrameValidationTests(unittest.IsolatedAsyncioTestCase):
         for quantization in (1,2):
             module=self.camera_module(synthetic_jpeg(quantization))
             with patch.dict(sys.modules,{'homeassistant.components.camera':module}):
-                frames.append(await monitor.get_frame(seen))
+                frame, _ = await monitor.get_frame(seen)
+                frames.append(frame)
         self.assertNotEqual(frames[0].content,frames[1].content)
         self.assertEqual([frame.source_frame_id for frame in frames],[None,None])
 
@@ -175,7 +176,7 @@ class FrameValidationTests(unittest.IsolatedAsyncioTestCase):
                 Image.new(mode,size).save(data,format='JPEG',**options)
                 module=self.camera_module(data.getvalue())
                 with patch.dict(sys.modules,{'homeassistant.components.camera':module}):
-                    frame=await self.monitor().get_frame(set())
+                    frame, _ = await self.monitor().get_frame(set())
                 self.assertEqual(frame.content,data.getvalue())
 
     async def test_decode_delay_cannot_send_an_old_receipt_to_ai(self):
