@@ -16,15 +16,20 @@ from .media import Staging
 DOMAIN='p1s_guard'
 _LOGGER=logging.getLogger(__name__)
 
-def CONFIG_SCHEMA(config):
+def _config_schema(config):
     """Validate YAML through HA's schema hook without importing HA in unit tests."""
     import probatio
     if DOMAIN in config:
         try:
             parse_config(config[DOMAIN])
         except ValueError:
-            raise probatio.Invalid('Invalid p1s_guard configuration; see the repository README') from None
+            error=probatio.Invalid('Invalid p1s_guard configuration; see the repository README')
+            error.secret=True  # HA's error formatter otherwise echoes the full YAML value.
+            raise error from None
     return config
+
+# Keep the callable hook explicit for HA and static integration validation.
+CONFIG_SCHEMA = _config_schema
 
 def diagnostic_outcome(result):
     if result == 'screen_clear_or_unjudgeable': return 'screen_success'
