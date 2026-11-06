@@ -28,6 +28,11 @@ class Context:
                 and bool(self.running_epoch))
 
     @property
+    def job(self) -> tuple[str, str]:
+        """Stable identity for cooldowns across transient guard-state changes."""
+        return self.task, self.start
+
+    @property
     def session(self) -> tuple:
         return self.task, self.start, self.running_epoch, self.guard_epoch
 
@@ -110,9 +115,9 @@ class Monitor:
         self.last_error = None
         self.notification_timeout = notification_timeout
 
-    async def send_notice(self, message):
+    async def send_notice(self, message, context):
         try:
-            return await asyncio.wait_for(self.notify(message), self.notification_timeout)
+            return await asyncio.wait_for(self.notify(message, context), self.notification_timeout)
         except Exception as error:
             raise NotificationFailure(error) from None
 
@@ -196,28 +201,28 @@ class Monitor:
                 freshness_verified = all(ids) and len(set(ids)) == 3
                 if not self.allow_pause or not freshness_verified:
                     phase = 'notification'
-                    await self.send_notice('Possible print failure; three assessments were suspicious. No pause was sent; frame freshness or automatic pause is not verified.')
+                    await self.send_notice('Possible print failure; three assessments were suspicious. No pause was sent; frame freshness or automatic pause is not verified.', initial)
                     return 'monitor_only'
                 if not self.same_session(initial): return 'session_changed'
                 try:
                     reserved = await self.reserve(initial.task, initial.start)
                 except Exception:
-                    await self.send_notice('Possible print failure. Could not safely reserve a pause attempt; no pause was sent. Check the printer.')
+                    await self.send_notice('Possible print failure. Could not safely reserve a pause attempt; no pause was sent. Check the printer.', initial)
                     return 'reservation_failed'
                 if not reserved: return 'already_attempted'
                 if not self.same_session(initial): return 'session_changed'
                 try:
                     await self.pause()
                 except Exception:
-                    await self.send_notice('Possible print failure. The pause request failed or its result is uncertain; check the printer.')
+                    await self.send_notice('Possible print failure. The pause request failed or its result is uncertain; check the printer.', initial)
                     return 'pause_uncertain'
                 # Confirm actual reported state; do not claim success merely from service return.
                 for _ in range(5):
                     if self.context().status == 'pause':
-                        await self.send_notice('Possible print failure. The printer reports paused.')
+                        await self.send_notice('Possible print failure. The printer reports paused.', initial)
                         return 'paused_confirmed'
                     await self.sleep(2)
-                await self.send_notice('Possible print failure. A pause was requested, but paused status was not confirmed; check the printer.')
+                await self.send_notice('Possible print failure. A pause was requested, but paused status was not confirmed; check the printer.', initial)
                 return 'pause_unconfirmed'
             except asyncio.CancelledError:
                 raise
