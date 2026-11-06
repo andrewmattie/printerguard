@@ -13,7 +13,7 @@ from p1s_guard.config import parse_config
 from p1s_guard.engine import Capture
 from guard_fixtures import SETTINGS, example_config, synthetic_jpeg
 from p1s_guard.latch import Latch
-from p1s_guard.media import prepare, recover, Staging
+from p1s_guard.media import MAX_MARKER_SIZE, prepare, recover, Staging
 
 def abandoned(root, frames):
     directory, paths, lease = prepare(root, frames)
@@ -41,11 +41,23 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError): stage.prepare([frame])
             self.assertTrue((second/'other.txt').exists())
     async def test_byte_quota_is_global(self):
-        with tempfile.TemporaryDirectory() as d:
-            stage=Staging(Path(d)); stage.startup(); stage.MAX_BYTES=30
-            with self.assertRaises(RuntimeError):
-                stage.prepare([SimpleNamespace(content=b'x'*16)])
-            self.assertEqual(list(Path(d).iterdir()),[])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stage = Staging(root)
+            stage.startup()
+            frame = SimpleNamespace(content=b'x' * 16)
+            stage.MAX_BYTES = len(frame.content) + MAX_MARKER_SIZE
+            stage.MAX_ACTIVE = 2
+
+            first, _ = stage.prepare([frame])
+            with self.assertRaisesRegex(RuntimeError, 'staging quota exceeded'):
+                stage.prepare([frame])
+            self.assertEqual(list(root.iterdir()), [first])
+
+            stage.cleanup(first)
+            second, _ = stage.prepare([frame])
+            stage.cleanup(second)
+            self.assertEqual(list(root.iterdir()), [])
     async def test_concurrent_writers_cannot_exceed_global_limit(self):
         with tempfile.TemporaryDirectory() as d:
             stage=Staging(Path(d)); stage.startup()

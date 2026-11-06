@@ -14,11 +14,20 @@ def staging(root):
 class Bus:
     def __init__(self,root,fail=False): self.root=root; self.fail=fail; self.paths=[]
     async def async_call(self,domain,service,data,blocking,return_response):
+        self.structure=data['structure']
         self.paths=[self.root / x['media_content_id'].split('local/')[1] for x in data['attachments']]
         assert all(p.exists() for p in self.paths)
         assert domain=='ai_task' and service=='generate_data' and return_response
         if self.fail: raise RuntimeError('failure')
-        return {'data':{f'frame_{i}_{k}':v for i in range(1,len(self.paths)+1) for k,v in [('judgeable',True),('score',.9),('evidence','visible')]}}
+        self.contents=[p.read_bytes() for p in self.paths]
+        response = {
+            'frame_1_judgeable': True, 'frame_1_score': 0.9, 'frame_1_evidence': 'loose filament',
+            'frame_2_judgeable': False, 'frame_2_score': 0.0, 'frame_2_evidence': 'obscured',
+            'frame_3_judgeable': True, 'frame_3_score': 0.4, 'frame_3_evidence': 'slight deformation',
+        }
+        if len(self.paths) == 1:
+            response = {key: value for key, value in response.items() if key.startswith('frame_1_')}
+        return {'data': response}
 class Tests(unittest.IsolatedAsyncioTestCase):
     async def test_repeated_cancellation_waits_for_preparation_and_cleanup(self):
         await self.check_repeated_file_cancellation('prepare')
@@ -72,11 +81,34 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             await started.wait(); task.cancel()
             with self.assertRaises(asyncio.CancelledError): await task
             self.assertEqual(list(root.iterdir()),[])
-    async def test_three_files_cleaned_after_success(self):
-        with tempfile.TemporaryDirectory() as d:
-            root=Path(d); bus=Bus(root); a=mod.AITaskAdapter(SimpleNamespace(services=bus),'ai_task.example',staging(root))
-            out=await a.compare([SimpleNamespace(content=b'1234')]*3,{})
-            self.assertEqual(len(out),3); self.assertTrue(all(not p.exists() for p in bus.paths)); self.assertEqual(list(root.iterdir()),[])
+    async def test_success_requests_ordered_frame_verdicts_and_cleans_staging(self):
+        verdicts = [
+            {'judgeable': True, 'score': 0.9, 'evidence': 'loose filament'},
+            {'judgeable': False, 'score': 0.0, 'evidence': 'obscured'},
+            {'judgeable': True, 'score': 0.4, 'evidence': 'slight deformation'},
+        ]
+        selectors = {'judgeable': {'boolean': {}}, 'score': {'number': {'min': 0, 'max': 1, 'step': 0.01}},
+                     'evidence': {'text': {}}}
+        for count in (1, 3):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                bus = Bus(root)
+                adapter = mod.AITaskAdapter(SimpleNamespace(services=bus), 'ai_task.example', staging(root))
+                contents = [b'1111', b'2222', b'3333'][:count]
+                frames = [SimpleNamespace(content=content) for content in contents]
+                if count == 1:
+                    out = [await adapter.screen(frames[0], {})]
+                else:
+                    out = await adapter.compare(frames, {})
+                self.assertEqual(out, verdicts[:count])
+                self.assertEqual(bus.contents, contents)
+                expected = {f'frame_{i}_{name}': selector for i in range(1, count + 1)
+                            for name, selector in selectors.items()}
+                self.assertEqual(set(bus.structure), set(expected))
+                for name, selector in expected.items():
+                    self.assertIs(bus.structure[name]['required'], True, name)
+                    self.assertEqual(bus.structure[name]['selector'], selector, name)
+                self.assertEqual(list(root.iterdir()), [])
     async def test_cleanup_after_error(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); bus=Bus(root,True); a=mod.AITaskAdapter(SimpleNamespace(services=bus),'ai_task.example',staging(root))
