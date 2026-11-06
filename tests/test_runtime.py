@@ -15,6 +15,12 @@ from guard_fixtures import SETTINGS, example_config, synthetic_jpeg
 from p1s_guard.latch import Latch
 from p1s_guard.media import prepare, recover, Staging
 
+def abandoned(root, frames):
+    directory, paths, lease = prepare(root, frames)
+    lease.close()
+    return directory, paths
+
+
 class FakeStore:
     def __init__(self): self.data=None; self.fail=False
     async def async_load(self): return self.data
@@ -60,7 +66,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError): stage.prepare([SimpleNamespace(content=b'1234')])
     async def test_setup_recovers_files_before_scheduling_and_registers_stop(self):
         with tempfile.TemporaryDirectory() as d:
-            root=Path(d); directory,_=prepare(root,[SimpleNamespace(content=b'1234')])
+            root=Path(d); directory,_=abandoned(root,[SimpleNamespace(content=b'1234')])
             events=[]
             def schedule(hass,callback,interval):
                 self.assertFalse(directory.exists())
@@ -102,12 +108,12 @@ class Tests(unittest.IsolatedAsyncioTestCase):
     async def test_startup_recovery_removes_only_owned_staging(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); other=root/'other.txt'; other.write_text('keep')
-            directory,paths=prepare(root,[SimpleNamespace(content=b'1234')])
+            directory,paths=abandoned(root,[SimpleNamespace(content=b'1234')])
             self.assertTrue(paths[0].exists()); recover(root)
             self.assertFalse(directory.exists()); self.assertEqual(other.read_text(),'keep')
     async def test_cleanup_refuses_unexpected_content(self):
         with tempfile.TemporaryDirectory() as d:
-            root=Path(d); directory,_=prepare(root,[SimpleNamespace(content=b'1234')])
+            root=Path(d); directory,_=abandoned(root,[SimpleNamespace(content=b'1234')])
             (directory/'other.txt').write_text('keep')
             with self.assertRaises(ValueError): recover(root)
             self.assertTrue((directory/'other.txt').exists())
