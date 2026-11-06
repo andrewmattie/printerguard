@@ -199,9 +199,9 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(runtime.last_notice,{})
 
     async def test_diagnostic_classification_and_isolation(self):
-        self.assertEqual(diagnostic_outcome('screen_clear_or_unjudgeable'),'screen_success')
-        self.assertEqual(diagnostic_outcome('monitor_only'),'comparison_success')
-        self.assertEqual(diagnostic_outcome('comparison_clear_or_unjudgeable'),'comparison_success')
+        self.assertEqual(diagnostic_outcome('screen_clear'),'clear')
+        self.assertEqual(diagnostic_outcome('monitor_only'),'suspicious')
+        self.assertEqual(diagnostic_outcome('comparison_not_confirmed'),'not_confirmed')
         self.assertEqual(diagnostic_outcome('ineligible'),'skipped')
         self.assertEqual(diagnostic_outcome('unavailable_or_error'),'failure')
         self.assertEqual(diagnostic_outcome('unexpected'),'failure')
@@ -217,16 +217,16 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(observed,[names[0]])
             self.assertEqual(runtime.diagnostics[names[0]]['last_check'],timestamp)
             self.assertEqual(runtime.diagnostics[names[1]]['outcome'],'not_checked')
-            await runtime.run(names[0],SimpleNamespace(run=lambda: result('screen_clear_or_unjudgeable')))
-            self.assertEqual(runtime.diagnostics[names[0]]['outcome'],'screen_success')
-            self.assertEqual(set(runtime.diagnostics[names[0]]),{'outcome','last_check'})
+            await runtime.run(names[0],SimpleNamespace(run=lambda: result('screen_clear')))
+            self.assertEqual(runtime.diagnostics[names[0]]['outcome'],'clear')
+            self.assertEqual(set(runtime.diagnostics[names[0]]),{'outcome','last_check','last_usable_assessment','check_started','assessment','notification','freshness'})
             async def fail(): raise RuntimeError('sensitive details')
             await runtime.run(names[1],SimpleNamespace(run=fail))
             self.assertEqual(runtime.diagnostics[names[1]]['outcome'],'failure')
             self.assertEqual(runtime.diagnostics[names[1]]['failure_phase'],'runtime')
             self.assertEqual(runtime.diagnostics[names[1]]['failure_category'],'other')
             self.assertNotIn('sensitive details',str(runtime.diagnostics))
-            await runtime.run(names[1],SimpleNamespace(run=lambda: result('screen_clear_or_unjudgeable')))
+            await runtime.run(names[1],SimpleNamespace(run=lambda: result('screen_clear')))
             self.assertNotIn('failure_phase',runtime.diagnostics[names[1]])
             self.assertNotIn('failure_category',runtime.diagnostics[names[1]])
 
@@ -252,11 +252,11 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                 first, second=entities
                 first.writes=0; second.writes=0
                 await first.async_added_to_hass(); await second.async_added_to_hass()
-                async def clear(): return 'screen_clear_or_unjudgeable'
+                async def clear(): return 'screen_clear'
                 await runtime.run(first.printer.prefix,SimpleNamespace(run=clear))
                 self.assertEqual((first.writes,second.writes),(1,0))
-                self.assertEqual(first.native_value,'screen_success')
-                self.assertEqual(set(first.extra_state_attributes),{'last_check'})
+                self.assertEqual(first.native_value,'clear')
+                self.assertEqual(set(first.extra_state_attributes),{'last_check','last_usable_assessment','check_started','assessment','notification','freshness'})
                 async def failure(): return 'unavailable_or_error'
                 detail={'phase':'frame_validation','category':'invalid_data','reason':'duplicate_frame'}
                 with self.assertLogs('p1s_guard',level='WARNING'):
@@ -266,6 +266,133 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn('failure_reason',first.extra_state_attributes)
                 first.remove_callback(); second.remove_callback()
                 self.assertEqual(runtime.observers,[])
+
+
+class HealthTests(unittest.IsolatedAsyncioTestCase):
+    async def test_usable_time_survives_degradation_failure_and_skips(self):
+        from test_engine import Fake
+        fake=Fake(); fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
+        with tempfile.TemporaryDirectory() as directory:
+            runtime=Runtime(SimpleNamespace(),Path(directory),Latch(FakeStore()),SETTINGS)
+            name=next(iter(runtime.jobs))
+            monitor=fake.monitor(on_started=lambda new_job:runtime.check_started(name,new_job))
+            await runtime.run(name,monitor)
+            healthy=runtime.diagnostics[name]
+            timestamp=healthy['last_usable_assessment']
+            self.assertIsNotNone(timestamp)
+            self.assertEqual((healthy['outcome'],healthy['assessment']),('clear','clear'))
+            fake.same=True
+            await runtime.run(name,monitor)
+            self.assertEqual(runtime.diagnostics[name]['outcome'],'degraded')
+            self.assertEqual(runtime.diagnostics[name]['reason'],'repeated_view')
+            self.assertEqual(runtime.diagnostics[name]['last_usable_assessment'],timestamp)
+            fake.same=False; fake.result={'judgeable':False,'score':0,'evidence':'obscured'}
+            await runtime.run(name,monitor)
+            self.assertEqual(runtime.diagnostics[name]['reason'],'unjudgeable')
+            self.assertEqual(runtime.diagnostics[name]['assessment'],'unjudgeable')
+            self.assertEqual(runtime.diagnostics[name]['last_usable_assessment'],timestamp)
+            async def fail(): raise OSError('synthetic-private-camera')
+            capture=monitor.capture; monitor.capture=fail
+            with self.assertLogs('p1s_guard',level='WARNING'):
+                await runtime.run(name,monitor)
+            self.assertEqual(runtime.diagnostics[name]['failure_phase'],'camera_capture')
+            self.assertEqual(runtime.diagnostics[name]['last_usable_assessment'],timestamp)
+            monitor.capture=capture; fake.status='idle'
+            await runtime.run(name,monitor)
+            self.assertEqual(runtime.diagnostics[name]['reason'],'printer_ineligible')
+            self.assertEqual(runtime.diagnostics[name]['last_usable_assessment'],timestamp)
+            fake.status='running'; fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
+            await runtime.run(name,monitor)
+            self.assertEqual(runtime.diagnostics[name]['outcome'],'clear')
+            self.assertNotEqual(runtime.diagnostics[name]['last_usable_assessment'],timestamp)
+            self.assertNotIn('failure_phase',runtime.diagnostics[name])
+            self.assertNotIn('synthetic-private',str(runtime.diagnostics))
+
+    async def test_notification_outcome_is_independent_from_assessment(self):
+        from test_engine import Fake
+        for status in ('submitted','suppressed_cooldown','suppressed_session','failed','timed_out'):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                fake=Fake()
+                async def notify(*args):
+                    if status=='failed': raise PermissionError('private target')
+                    if status=='timed_out': await asyncio.Event().wait()
+                    return status
+                fake.notify=notify
+                monitor=fake.monitor(notification_timeout=0.01)
+                runtime=Runtime(SimpleNamespace(),Path(directory),Latch(FakeStore()),SETTINGS)
+                name=next(iter(runtime.jobs))
+                if status in ('failed','timed_out'):
+                    with self.assertLogs('p1s_guard',level='WARNING'): await runtime.run(name,monitor)
+                else: await runtime.run(name,monitor)
+                diagnostic=runtime.diagnostics[name]
+                self.assertEqual(diagnostic['notification'],status)
+                self.assertEqual(diagnostic['assessment'],'suspicious')
+                if status=='suppressed_session': self.assertIsNone(diagnostic['last_usable_assessment'])
+                else: self.assertIsNotNone(diagnostic['last_usable_assessment'])
+                self.assertNotIn('private',str(diagnostic))
+                self.assertEqual(diagnostic['outcome'],'failure' if status in ('failed','timed_out') else 'skipped' if status=='suppressed_session' else 'suspicious')
+                self.assertEqual(runtime.diagnostics[list(runtime.jobs)[1]]['outcome'],'not_checked')
+
+    async def test_active_check_and_stop_are_observable_without_duplicate_work(self):
+        from test_engine import Fake
+        fake=Fake(); entered=asyncio.Event()
+        async def capture(): entered.set(); await asyncio.Event().wait()
+        fake.capture=capture
+        with tempfile.TemporaryDirectory() as directory:
+            hass=SimpleNamespace(async_create_task=asyncio.create_task)
+            runtime=Runtime(hass,Path(directory),Latch(FakeStore()),SETTINGS)
+            name=next(iter(runtime.jobs)); monitor=fake.monitor(on_started=lambda new_job:runtime.check_started(name,new_job))
+            runtime.jobs={name:monitor}; runtime.started-=121
+            runtime.tick(None); await entered.wait()
+            self.assertEqual(runtime.diagnostics[name]['outcome'],'checking')
+            self.assertIsNotNone(runtime.diagnostics[name]['check_started'])
+            self.assertIsNone(runtime.diagnostics[name]['last_check'])
+            runtime.tick(None); self.assertEqual(len(runtime.tasks),1)
+            await runtime.stop(None)
+            self.assertEqual(runtime.diagnostics[name]['outcome'],'skipped')
+            self.assertEqual(runtime.diagnostics[name]['reason'],'cancelled')
+            self.assertFalse(monitor.lock.locked())
+            restarted=Runtime(hass,Path(directory),Latch(FakeStore()),SETTINGS)
+            self.assertIsNone(restarted.diagnostics[name]['last_usable_assessment'])
+            self.assertEqual(restarted.diagnostics[name]['outcome'],'not_checked')
+            self.assertEqual(restarted.last_notice,{})
+
+    async def test_new_job_does_not_inherit_last_usable_assessment(self):
+        from test_engine import Fake
+        fake=Fake(); fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
+        with tempfile.TemporaryDirectory() as directory:
+            runtime=Runtime(SimpleNamespace(),Path(directory),Latch(FakeStore()),SETTINGS)
+            name=next(iter(runtime.jobs))
+            monitor=fake.monitor(on_started=lambda new_job:runtime.check_started(name,new_job))
+            await runtime.run(name,monitor)
+            self.assertIsNotNone(runtime.diagnostics[name]['last_usable_assessment'])
+            fake.job='next job'; fake.result={'judgeable':False,'score':0,'evidence':'obscured'}
+            await runtime.run(name,monitor)
+            self.assertIsNone(runtime.diagnostics[name]['last_usable_assessment'])
+            self.assertEqual(runtime.diagnostics[name]['outcome'],'degraded')
+
+    async def test_changed_skip_reason_is_published_without_waiting(self):
+        async def result(value): return value
+        with tempfile.TemporaryDirectory() as directory:
+            runtime=Runtime(SimpleNamespace(),Path(directory),Latch(FakeStore()),SETTINGS)
+            name=next(iter(runtime.jobs))
+            await runtime.run(name,SimpleNamespace(run=lambda:result('ineligible')))
+            await runtime.run(name,SimpleNamespace(run=lambda:result('session_changed')))
+            self.assertEqual(runtime.diagnostics[name]['reason'],'session_changed')
+
+    async def test_diagnostic_labels_are_allowlisted(self):
+        async def failure(): return 'unavailable_or_error'
+        with tempfile.TemporaryDirectory() as directory:
+            runtime=Runtime(SimpleNamespace(),Path(directory),Latch(FakeStore()),SETTINGS)
+            name=next(iter(runtime.jobs))
+            monitor=SimpleNamespace(run=failure,last_freshness='private freshness',
+                last_assessment='private assessment',last_notification='private target',
+                last_error={'phase':'private path','category':'private token','reason':'private image'})
+            with self.assertLogs('p1s_guard',level='WARNING'): await runtime.run(name,monitor)
+            diagnostic=runtime.diagnostics[name]
+            self.assertEqual(diagnostic['failure_phase'],'runtime')
+            self.assertEqual(diagnostic['failure_category'],'other')
+            self.assertNotIn('private',str(diagnostic))
 
 
 class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -290,12 +417,12 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(monitor.lock.locked())
             self.assertEqual(runtime.diagnostics[names[0]]['failure_phase'],'notification')
             self.assertEqual(runtime.diagnostics[names[0]]['failure_category'],'timeout')
-            self.assertEqual(runtime.diagnostics[names[1]]['outcome'],'screen_success')
+            self.assertEqual(runtime.diagnostics[names[1]]['outcome'],'clear')
             async def delivered(message,context): first.called.append(('notify',message))
             monitor.notify=delivered
             runtime.tick(None)
             await asyncio.wait_for(asyncio.gather(*tuple(runtime.tasks)),0.5)
-            self.assertEqual(runtime.diagnostics[names[0]]['outcome'],'comparison_success')
+            self.assertEqual(runtime.diagnostics[names[0]]['outcome'],'suspicious')
             self.assertEqual(second.n,2)
             await runtime.stop(None)
 
@@ -345,7 +472,7 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     monitor.clock=lambda:ticks[0]
                     monitor.sleep=advance
                     await runtime.run(name,monitor)
-                    self.assertEqual(runtime.diagnostics[name]['outcome'],'comparison_success')
+                    self.assertEqual(runtime.diagnostics[name]['outcome'],'suspicious')
                     self.assertFalse(monitor.allow_pause)
             self.assertEqual(captures,{'alpha':3,'beta':3})
             self.assertEqual(list(Path(directory).iterdir()),[])
@@ -444,7 +571,7 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failure_reason_is_allowlisted_and_cleared_after_success(self):
         async def failure(): return 'unavailable_or_error'
-        async def success(): return 'screen_clear_or_unjudgeable'
+        async def success(): return 'screen_clear'
         with tempfile.TemporaryDirectory() as directory:
             runtime = Runtime(SimpleNamespace(),Path(directory),Latch(FakeStore()),SETTINGS)
             name = next(iter(runtime.jobs))

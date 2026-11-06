@@ -28,7 +28,8 @@ class GuardDiagnostic(SensorEntity):
     @property
     def extra_state_attributes(self):
         diagnostic=self.runtime.diagnostics[self.printer.prefix]
-        return {key:diagnostic[key] for key in ('last_check','failure_phase','failure_category','failure_reason') if key in diagnostic}
+        return {key:diagnostic[key] for key in ('last_check','last_usable_assessment','check_started','assessment','notification','freshness','reason',
+            'failure_phase','failure_category','failure_reason') if key in diagnostic}
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
