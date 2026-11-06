@@ -32,6 +32,7 @@ def _config_schema(config):
 CONFIG_SCHEMA = _config_schema
 
 def diagnostic_outcome(result):
+    if result == 'repeated_view': return 'degraded'
     if result == 'screen_clear_or_unjudgeable': return 'screen_success'
     if result in ('monitor_only', 'comparison_clear_or_unjudgeable'): return 'comparison_success'
     if result in ('ineligible', 'session_changed', 'stale_result', 'stale_gap', 'busy', 'already_attempted'): return 'skipped'
@@ -98,6 +99,9 @@ class Runtime:
         # Suppress repeated idle/ineligible writes; never hide a change or AI result.
         if outcome != 'skipped' or previous != outcome or now-self.diagnostic_last_publish.get(name,float('-inf')) >= 900:
             self.diagnostics[name]={'outcome':outcome, 'last_check':datetime.now(timezone.utc).isoformat()}
+            freshness=getattr(monitor,'last_freshness',None)
+            if freshness in ('not_checked','unknown','suspected_stale'):
+                self.diagnostics[name]['freshness']=freshness
             if result == 'unavailable_or_error':
                 detail=(None if unexpected else getattr(monitor,'last_error',None)) or {'phase':'runtime','category':'other'}
                 self.diagnostics[name].update({'failure_phase':detail['phase'], 'failure_category':detail['category']})
