@@ -149,6 +149,21 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancelled.is_set()); self.assertFalse(monitor.lock.locked())
         self.assertNotIn('pause',f.called)
 
+    async def test_session_change_during_each_async_assessment_boundary_aborts(self):
+        for phase in ('capture','screen','compare'):
+            with self.subTest(phase=phase):
+                fake=Fake(); original=getattr(fake,phase)
+                async def changed(*args):
+                    result=await original(*args)
+                    fake.job='replacement'
+                    return result
+                setattr(fake,phase,changed)
+                monitor=fake.monitor()
+                self.assertEqual(await monitor.run(),'session_changed')
+                self.assertFalse(monitor.assessment_usable)
+                self.assertNotIn('pause',fake.called)
+                self.assertFalse(any(isinstance(call,tuple) for call in fake.called))
+
     async def test_session_change_during_notice_cannot_refresh_usable_health(self):
         fake=Fake()
         async def notify(*args): fake.job='replacement'; return 'submitted'

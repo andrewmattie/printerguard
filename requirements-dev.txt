@@ -1,0 +1,4 @@
+# Match the image/schema/YAML versions provided by Home Assistant Core 2026.10.4.
+Pillow==12.3.0
+probatio==0.13.0
+PyYAML==6.0.3
