@@ -396,6 +396,28 @@ class HealthTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_back_to_back_ticks_cannot_queue_duplicate_printer_checks(self):
+        from test_engine import Fake
+        with tempfile.TemporaryDirectory() as directory:
+            runtime=Runtime(SimpleNamespace(async_create_task=asyncio.create_task),Path(directory),Latch(FakeStore()),SETTINGS)
+            entered=asyncio.Event(); calls=[]
+            async def capture():
+                calls.append('capture')
+                if len(calls)==2: entered.set()
+                await asyncio.Event().wait()
+            for name in runtime.jobs:
+                fake=Fake(); fake.capture=capture; runtime.jobs[name]=fake.monitor()
+            runtime.started-=121
+            try:
+                runtime.tick(None); runtime.tick(None)
+                self.assertEqual(len(runtime.tasks),2)
+                await asyncio.wait_for(entered.wait(),1)
+                self.assertEqual(len(calls),2)
+            finally:
+                await runtime.stop(None)
+            self.assertEqual(runtime.tasks,set())
+            self.assertEqual(runtime.pending,set())
+
     async def test_scheduler_recovers_after_notification_timeout_and_other_printer_runs(self):
         from test_engine import Fake
         first=Fake(); second=Fake(); second.result={'judgeable':True,'score':0.1,'evidence':'clear'}
