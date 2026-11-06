@@ -5,8 +5,16 @@ printers. It uses an AI Task to check a camera frame for print failures. If the
 first frame looks suspicious, it takes two more and alerts you if the AI flags
 all three in the comparison.
 
-Live monitoring is still unverified because of an open camera validation issue.
-Test it only on supervised prints.
+Checks start after a two-minute startup delay and run on a one-minute scheduler.
+The extra frames are taken about 30 seconds apart. After a notification action
+returns successfully, repeats for that printer's current job are suppressed for
+30 minutes. A new job does not inherit the previous job's cooldown; restarting HA
+resets the in-memory cooldown.
+
+Developed against Home Assistant Core 2026.10.4. The A1 Mini has produced a usable
+live assessment; P1S and notification-delivery verification remain incomplete.
+Test only on supervised prints. False alarms and missed failures are possible;
+keep checking the printer yourself. Different image bytes do not prove a live view.
 
 ## Setup
 
@@ -40,10 +48,11 @@ See [diagnostics](DIAGNOSTICS.md) for skipped checks and camera errors.
 
 ## Development
 
-Run the tests with Python 3.10 or newer on a POSIX host.
+Use Python 3.14.2 or newer on a POSIX host and install the development dependencies.
 
 ```sh
-python3 -m unittest discover -s tests -v
+python3 -m pip install -r requirements-dev.txt
+python3 scripts/check.py
 ```
 
 [Contributing](CONTRIBUTING.md) · [Apache 2.0 license](LICENSE)
