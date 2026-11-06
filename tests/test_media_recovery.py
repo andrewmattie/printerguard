@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'))
-from p1s_guard import media
+from printer_guard import media
 
 
 def abandoned(root, count=3):
@@ -27,7 +27,7 @@ import os, signal, sys
 from pathlib import Path
 from types import SimpleNamespace
 sys.path.insert(0,sys.argv[2])
-from p1s_guard import media
+from printer_guard import media
 stage=media.Staging(Path(sys.argv[1])); stage.startup()
 directory, paths=stage.prepare([SimpleNamespace(content=b'1234')]*3)
 if sys.argv[3] in ('terminal','linked','removed'):
@@ -74,7 +74,7 @@ class RecoveryTests(unittest.TestCase):
     def test_ambiguous_candidate_does_not_prevent_other_owned_recovery(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
-            ambiguous=root/'p1s_guard_tmp_abcdefgh'; ambiguous.mkdir()
+            ambiguous=root/'printer_guard_tmp_abcdefgh'; ambiguous.mkdir()
             unrelated=ambiguous/'frame_1.jpg'; unrelated.write_bytes(b'keep')
             first,_=abandoned(root); second,_=abandoned(root)
             original=Path.iterdir
@@ -299,7 +299,7 @@ class RecoveryTests(unittest.TestCase):
             stage.cleanup(directory)
 
     def test_legacy_and_incomplete_markers_are_not_automatically_deleted(self):
-        for marker in (b'p1s_guard staging v1\n',b'partial'):
+        for marker in (b'printer_guard staging v1\n',b'partial'):
             with self.subTest(marker=marker), tempfile.TemporaryDirectory() as temporary:
                 root=Path(temporary); directory,paths=abandoned(root)
                 (directory/media.MARKER).write_bytes(marker)
@@ -313,7 +313,7 @@ class RecoveryTests(unittest.TestCase):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
                 root=Path(temporary); target=root/'unrelated.txt'; target.write_text('keep')
                 if kind=='directory_symlink':
-                    directory=root/'p1s_guard_tmp_abcdefgh'; directory.symlink_to(root,target_is_directory=True)
+                    directory=root/'printer_guard_tmp_abcdefgh'; directory.symlink_to(root,target_is_directory=True)
                 else:
                     directory,paths=abandoned(root)
                     if kind=='marker_symlink':
@@ -330,7 +330,7 @@ class RecoveryTests(unittest.TestCase):
 
     def test_recovery_tolerates_a_directory_already_removed_by_another_cleaner(self):
         with tempfile.TemporaryDirectory() as temporary:
-            path=Path(temporary)/'p1s_guard_tmp_abcdefgh'
+            path=Path(temporary)/'printer_guard_tmp_abcdefgh'
             self.assertFalse(media.cleanup_directory(path))
 
     def test_sync_failure_prevents_image_writes_and_leaves_staging_blocked(self):

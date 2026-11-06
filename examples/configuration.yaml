@@ -1,6 +1,6 @@
 # Fictitious bindings only. Replace these in your private HA configuration.
 # Merge this section with your existing configuration; do not overwrite it.
-p1s_guard:
+printer_guard:
   ai_task: ai_task.example_vision
   notify_service: notify.example_phone
   printers:

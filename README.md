@@ -24,13 +24,33 @@ images and returns structured data, and a `notify.<service>` action that accepts
 provider and incur charges. Read the [privacy notes](PRIVACY.md) before enabling
 monitoring.
 
-1. Copy [`custom_components/p1s_guard`](custom_components/p1s_guard) into your
+1. Copy [`custom_components/printer_guard`](custom_components/printer_guard) into your
    Home Assistant configuration directory's `custom_components/` folder.
 2. Adapt the [YAML example](examples/configuration.yaml) for one or two printers.
    Set `homeassistant.media_dirs.local` to an existing, writable absolute path
    on a local POSIX filesystem.
 3. Check the printer entities below, run Home Assistant's configuration check,
    and restart Home Assistant.
+
+### Replacing an earlier installation
+
+Changing the integration domain is a fresh installation in Home Assistant.
+Before replacing a running installation, back up its configuration and record
+the two diagnostic entity IDs, dashboard references, and any automations that
+use them. Replace the component directory and the top-level YAML key together,
+then validate the configuration before restarting. Keep a copy of the old
+component and YAML so the previous installation can be restored if validation
+fails. Do not delete the shared media directory: inspect any old staging
+directories and cleanup records with the previous component's recovery
+procedure before removing it.
+
+After a successful configuration check and restart, confirm both diagnostics
+load under the new integration domain. Home Assistant can retain registry entries
+from the old domain; remove only those entries through Entities settings after
+checking that no dashboard, automation, script, scene, or helper still uses them.
+The new diagnostic unique IDs are different, so existing diagnostic entity IDs
+may need to be assigned to the new entries through Entities settings. Check
+monitoring outcomes after the startup delay; this does not verify alert delivery.
 
 For `entity_prefix: printer_one`, the camera must be available and these entities
 must have the following states.

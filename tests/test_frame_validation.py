@@ -9,8 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'))
-from p1s_guard.engine import MAX_FRAME_BYTES, Context, FrameValidationError, Monitor
-from p1s_guard.ha_runtime import camera_capture
+from printer_guard.engine import MAX_FRAME_BYTES, Context, FrameValidationError, Monitor
+from printer_guard.ha_runtime import camera_capture
 from guard_fixtures import SETTINGS, synthetic_jpeg
 
 
@@ -52,7 +52,7 @@ class FrameValidationTests(unittest.IsolatedAsyncioTestCase):
     async def test_oversized_mutable_camera_buffer_is_rejected_before_copying(self):
         module=self.camera_module(bytearray(MAX_FRAME_BYTES+1))
         with patch.dict(sys.modules,{'homeassistant.components.camera':module}), patch(
-                'p1s_guard.ha_runtime.bytes',side_effect=AssertionError('copy must not run'),create=True):
+                'printer_guard.ha_runtime.bytes',side_effect=AssertionError('copy must not run'),create=True):
             monitor=self.monitor()
             self.assertEqual(await monitor.run(),'unavailable_or_error')
         self.assertEqual(monitor.last_error,{
@@ -136,19 +136,19 @@ class FrameValidationTests(unittest.IsolatedAsyncioTestCase):
         from test_engine import Fake
         fake=Fake()
         def delayed_decode(content): fake.t+=6
-        with patch('p1s_guard.engine.verify_jpeg',delayed_decode):
+        with patch('printer_guard.engine.verify_jpeg',delayed_decode):
             monitor=fake.monitor()
             self.assertEqual(await monitor.run(),'unavailable_or_error')
         self.assertEqual(monitor.last_error['reason'],'stale_receipt')
         self.assertNotIn('screen',fake.called)
 
     async def test_decoding_runs_off_the_event_loop(self):
-        from p1s_guard.frame_validation import verify_jpeg
+        from printer_guard.frame_validation import verify_jpeg
         main_thread=threading.get_ident(); worker_threads=[]
         def verify(content):
             worker_threads.append(threading.get_ident())
             return verify_jpeg(content)
-        with patch.dict(sys.modules,{'homeassistant.components.camera':self.camera_module(synthetic_jpeg())}), patch('p1s_guard.engine.verify_jpeg',verify):
+        with patch.dict(sys.modules,{'homeassistant.components.camera':self.camera_module(synthetic_jpeg())}), patch('printer_guard.engine.verify_jpeg',verify):
             await self.monitor().get_frame(set())
         self.assertEqual(len(worker_threads),1)
         self.assertNotEqual(worker_threads[0],main_thread)

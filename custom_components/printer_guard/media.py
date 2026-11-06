@@ -9,14 +9,14 @@ import stat
 import tempfile
 import weakref
 
-PREFIX = 'p1s_guard_tmp_'
-NAME = re.compile(r'^p1s_guard_tmp_[a-z0-9_]{8}$')
+PREFIX = 'printer_guard_tmp_'
+NAME = re.compile(r'^printer_guard_tmp_[a-z0-9_]{8}$')
 FILES = {'frame_1.jpg', 'frame_2.jpg', 'frame_3.jpg'}
-MARKER = '.p1s_guard_owner'
-MARKER_CONTENT = b'p1s_guard staging v2\n'
-TERMINAL_PREFIX = '.p1s_guard_done_'
-TERMINAL_NAME = re.compile(r'^\.p1s_guard_done_[a-z0-9_]{8}$')
-TERMINAL_MAGIC = b'p1s_guard cleanup v1\n'
+MARKER = '.printer_guard_owner'
+MARKER_CONTENT = b'printer_guard staging v2\n'
+TERMINAL_PREFIX = '.printer_guard_done_'
+TERMINAL_NAME = re.compile(r'^\.printer_guard_done_[a-z0-9_]{8}$')
+TERMINAL_MAGIC = b'printer_guard cleanup v1\n'
 MAX_MARKER_SIZE = 128
 MAX_SIZE = 8_000_000
 

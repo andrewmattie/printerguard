@@ -1,5 +1,5 @@
 {
-  "domain": "p1s_guard",
+  "domain": "printer_guard",
   "name": "Printer Guard (experimental)",
   "codeowners": [],
   "dependencies": [

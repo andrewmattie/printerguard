@@ -235,7 +235,7 @@ __marimo__/
 /media/
 /www/
 /backups/
-p1s_guard_tmp_*/
+printer_guard_tmp_*/
 *.jpg
 *.jpeg
 *.png
@@ -250,5 +250,5 @@ p1s_guard_tmp_*/
 docs/internal/
 
 # Original integration artwork; keep all camera images ignored.
-!custom_components/p1s_guard/brand/icon.png
-!custom_components/p1s_guard/brand/icon@2x.png
+!custom_components/printer_guard/brand/icon.png
+!custom_components/printer_guard/brand/icon@2x.png

@@ -67,5 +67,5 @@ jobs:
           cache-dependency-path: integration/requirements-ha-test.txt
       - run: python -m pip install -r requirements-ha-test.txt
         working-directory: integration
-      - run: python scripts/check_ha.py --previous ../previous/custom_components/p1s_guard
+      - run: python scripts/check_ha.py --previous ../previous/custom_components
         working-directory: integration

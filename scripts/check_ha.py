@@ -27,8 +27,14 @@ from homeassistant.core import HomeAssistant, SupportsResponse
 from homeassistant.helpers import entity_registry as er
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "custom_components/p1s_guard"
+SOURCE = ROOT / "custom_components/printer_guard"
 problems = []
+
+
+def source_domain(source=None):
+    if source is None:
+        source = SOURCE
+    return json.loads((source / "manifest.json").read_text())["domain"]
 
 
 class ProblemCapture(logging.Handler):
@@ -96,8 +102,11 @@ async def start(root, settings, missing_media=False):
             )
     if not (root / "unrelated.txt").exists():
         (root / "unrelated.txt").write_text("preserve unrelated configuration data")
-    component = root / "custom_components/p1s_guard"
+    component = root / "custom_components" / source_domain(SOURCE)
     component.parent.mkdir(exist_ok=True)
+    for prior in component.parent.iterdir():
+        if prior.is_dir() and prior != component and (prior / "manifest.json").is_file():
+            shutil.rmtree(prior)
     if component.exists():
         shutil.rmtree(component)
     shutil.copytree(SOURCE, component, ignore=shutil.ignore_patterns("__pycache__"))
@@ -119,7 +128,7 @@ async def start(root, settings, missing_media=False):
         "http": {"server_host": "127.0.0.1", "server_port": port},
     }
     if settings is not None:
-        config["p1s_guard"] = settings
+        config[source_domain(SOURCE)] = settings
     try:
         async with asyncio.timeout(30):
             await bootstrap.async_from_config_dict(config, hass)
@@ -146,10 +155,11 @@ def eligible(hass, runtime):
         hass.states.async_set(printer.camera, "idle")
 
 
-async def run_case(root, count, boundary, expect_existing_registry=False):
+async def run_case(root, count, boundary, expect_existing_registry=False, uninstall=False):
     problem_start = len(problems)
     hass, media = await start(root, configuration(count))
-    runtime = hass.data["p1s_guard"]
+    domain = source_domain(SOURCE)
+    runtime = hass.data[domain]
     calls = []
     provider_entered = asyncio.Event()
     provider_release = asyncio.Event()
@@ -183,7 +193,7 @@ async def run_case(root, count, boundary, expect_existing_registry=False):
         )
         eligible(hass, runtime)
         capture_class = importlib.import_module(
-            "custom_components.p1s_guard.engine"
+            f"custom_components.{domain}.engine"
         ).Capture
 
         async def capture():
@@ -258,6 +268,12 @@ async def run_case(root, count, boundary, expect_existing_registry=False):
             er.async_get(hass).async_get_or_create(
                 "sensor", "example", "unrelated_fixture_entity"
             )
+        if uninstall:
+            registry = er.async_get(hass)
+            for entry in tuple(registry.entities.values()):
+                if entry.platform == domain:
+                    registry.async_remove(entry.entity_id)
+            await hass.async_block_till_done()
     finally:
         provider_release.set()
         worker_release.set()
@@ -283,15 +299,15 @@ async def failure_case(root, kind):
     hass, media = await start(root, settings, missing_media=kind == "missing_media")
     try:
         if kind in ("invalid_config", "missing_media"):
-            assert "p1s_guard" not in hass.data
+            assert "printer_guard" not in hass.data
             assert marker not in "\n".join(problems)
             outcome = "setup_disabled"
         else:
-            runtime = hass.data["p1s_guard"]
+            runtime = hass.data["printer_guard"]
             eligible(hass, runtime)
             if kind != "unavailable_camera":
                 capture_class = importlib.import_module(
-                    "custom_components.p1s_guard.engine"
+                    "custom_components.printer_guard.engine"
                 ).Capture
 
                 async def capture():
@@ -360,7 +376,7 @@ async def matrix():
         # Reuse a stopped installation directory with Guard omitted from config.
         hass, media = await start(root / "0", None)
         try:
-            assert "p1s_guard" not in hass.data
+            assert "printer_guard" not in hass.data
             restored = [
                 s
                 for s in hass.states.async_all()
@@ -374,7 +390,7 @@ async def matrix():
             entries = [
                 entry
                 for entry in registry.entities.values()
-                if entry.platform == "p1s_guard"
+                if entry.platform == "printer_guard"
             ]
             assert len(entries) == 1
             # This is the registry API used by HA settings, never a storage-file edit.
@@ -425,12 +441,12 @@ async def matrix():
 async def alerts():
     with tempfile.TemporaryDirectory(prefix="printguard-alert-path-") as directory:
         hass, media = await start(Path(directory), configuration(1))
-        runtime = hass.data["p1s_guard"]
+        runtime = hass.data["printer_guard"]
         eligible(hass, runtime)
         name, monitor = next(iter(runtime.jobs.items()))
         printer = runtime.printers[0]
         frame_class = importlib.import_module(
-            "custom_components.p1s_guard.engine"
+            "custom_components.printer_guard.engine"
         ).Capture
         elapsed = [0.0]
         captures = []
@@ -588,7 +604,7 @@ async def service_contract():
         prefix="printguard-service-contract-"
     ) as directory:
         hass, media = await start(Path(directory), configuration(1))
-        runtime = hass.data["p1s_guard"]
+        runtime = hass.data["printer_guard"]
         calls = []
         full_features = (
             AITaskEntityFeature.GENERATE_DATA | AITaskEntityFeature.SUPPORT_ATTACHMENTS
@@ -631,7 +647,7 @@ async def service_contract():
             eligible(hass, runtime)
             name, monitor = next(iter(runtime.jobs.items()))
             frame_class = importlib.import_module(
-                "custom_components.p1s_guard.engine"
+                "custom_components.printer_guard.engine"
             ).Capture
 
             async def capture():
@@ -727,7 +743,7 @@ def main():
     parser.add_argument(
         "--previous",
         type=Path,
-        help="Optional previous p1s_guard component folder for cold-process update and rollback checks",
+        help="Optional previous component folder or custom_components parent for cold-process update and rollback checks",
     )
     parser.add_argument("--report", type=Path, help="Write a fixed-field JSON report")
     parser.add_argument(
@@ -738,6 +754,7 @@ def main():
     parser.add_argument("--_source", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--_fixture", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--_existing", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--_uninstall", action="store_true", help=argparse.SUPPRESS)
     arguments = parser.parse_args()
     if importlib.metadata.version("homeassistant") != "2026.11.0":
         raise SystemExit(
@@ -777,7 +794,8 @@ def main():
             ).read_text() == "printguard synthetic data only\n"
             result = asyncio.run(
                 run_case(
-                    fixture, 1, "clear", expect_existing_registry=arguments._existing
+                    fixture, 1, "clear", expect_existing_registry=arguments._existing,
+                    uninstall=arguments._uninstall
                 )
             )
         print(json.dumps(result))
@@ -785,10 +803,10 @@ def main():
     sources = {SOURCE: source_files(SOURCE)}
     if arguments.previous:
         previous = arguments.previous.resolve(strict=True)
-        assert (
-            json.loads((previous / "manifest.json").read_text())["domain"]
-            == "p1s_guard"
-        )
+        if previous.name == "custom_components":
+            candidates = [path for path in previous.iterdir() if (path / "manifest.json").is_file()]
+            assert len(candidates) == 1
+            previous = candidates[0]
         sources[previous] = source_files(previous)
     results = []
     with tempfile.TemporaryDirectory(prefix="printguard-ha-check-") as directory:
@@ -824,6 +842,8 @@ def main():
                 command.extend(["--_fixture", str(fixture)])
                 if name != "install_previous":
                     command.append("--_existing")
+                if name != "rollback_previous":
+                    command.append("--_uninstall")
             process = subprocess.run(
                 command,
                 capture_output=True,
@@ -838,7 +858,7 @@ def main():
             result = json.loads(process.stdout)
             if mode == "install":
                 assert (
-                    source_files(fixture / "custom_components/p1s_guard")
+                    source_files(fixture / "custom_components" / source_domain(source))
                     == sources[source]
                 )
                 assert (

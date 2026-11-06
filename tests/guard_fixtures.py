@@ -1,5 +1,5 @@
 """Synthetic bindings shared by tests; never use installation-specific IDs."""
-from p1s_guard.config import parse_config
+from printer_guard.config import parse_config
 
 
 def example_config():
