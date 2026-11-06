@@ -9,6 +9,8 @@ import stat
 import tempfile
 import weakref
 
+from .frame_validation import MAX_FRAME_BYTES
+
 PREFIX = 'printer_guard_tmp_'
 NAME = re.compile(r'^printer_guard_tmp_[a-z0-9_]{8}$')
 FILES = {'frame_1.jpg', 'frame_2.jpg', 'frame_3.jpg'}
@@ -18,7 +20,6 @@ TERMINAL_PREFIX = '.printer_guard_done_'
 TERMINAL_NAME = re.compile(r'^\.printer_guard_done_[a-z0-9_]{8}$')
 TERMINAL_MAGIC = b'printer_guard cleanup v1\n'
 MAX_MARKER_SIZE = 128
-MAX_SIZE = 8_000_000
 
 
 class _Lease:
@@ -265,7 +266,10 @@ def recover(root: Path) -> int:
 
 def prepare(root: Path, frames):
     """Return (directory, paths, lease); the caller must retain the live lease."""
-    if len(frames) not in (1, 3) or any(not isinstance(f.content, bytes) or not 4 <= len(f.content) <= MAX_SIZE for f in frames):
+    if len(frames) not in (1, 3) or any(
+        not isinstance(frame.content, bytes) or not 4 <= len(frame.content) <= MAX_FRAME_BYTES
+        for frame in frames
+    ):
         raise ValueError('invalid frame count or size')
     root = root.resolve(strict=True)
     directory = Path(tempfile.mkdtemp(prefix=PREFIX, dir=root))

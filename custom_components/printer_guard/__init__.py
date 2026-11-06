@@ -53,7 +53,6 @@ def diagnostic_outcome(result):
 class Runtime:
     def __init__(self,hass,root,latch,settings,staging=None):
         self.hass=hass
-        self.root=root
         self.latch=latch
         self.printers=settings.printers
         self.staging=staging or Staging(root)

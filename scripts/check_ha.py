@@ -92,6 +92,16 @@ def jpeg():
     return output.getvalue()
 
 
+def install_synthetic_capture(domain, monitors):
+    capture_class = importlib.import_module(f"custom_components.{domain}.engine").Capture
+
+    async def capture():
+        return capture_class(jpeg(), time.monotonic())
+
+    for monitor in monitors:
+        monitor.capture = capture
+
+
 async def start(root, settings, missing_media=False):
     media = root / "media"
     if not missing_media:
@@ -192,15 +202,7 @@ async def run_case(root, count, boundary, expect_existing_registry=False, uninst
             item["outcome"] == "skipped" for item in runtime.diagnostics.values()
         )
         eligible(hass, runtime)
-        capture_class = importlib.import_module(
-            f"custom_components.{domain}.engine"
-        ).Capture
-
-        async def capture():
-            return capture_class(jpeg(), time.monotonic())
-
-        for monitor in runtime.jobs.values():
-            monitor.capture = capture
+        install_synthetic_capture(domain, runtime.jobs.values())
 
         async def provider(call):
             calls.append(len(call.data["attachments"]))
@@ -306,15 +308,7 @@ async def failure_case(root, kind):
             runtime = hass.data["printer_guard"]
             eligible(hass, runtime)
             if kind != "unavailable_camera":
-                capture_class = importlib.import_module(
-                    "custom_components.printer_guard.engine"
-                ).Capture
-
-                async def capture():
-                    return capture_class(jpeg(), time.monotonic())
-
-                for monitor in runtime.jobs.values():
-                    monitor.capture = capture
+                install_synthetic_capture("printer_guard", runtime.jobs.values())
             if kind == "unavailable_provider":
                 hass.services.async_remove("ai_task", "generate_data")
             if kind == "read_only_media":
@@ -652,14 +646,7 @@ async def service_contract():
             assert hass.states.get("ai_task.example_vision") is not None
             eligible(hass, runtime)
             name, monitor = next(iter(runtime.jobs.items()))
-            frame_class = importlib.import_module(
-                "custom_components.printer_guard.engine"
-            ).Capture
-
-            async def capture():
-                return frame_class(jpeg(), time.monotonic())
-
-            monitor.capture = capture
+            install_synthetic_capture("printer_guard", (monitor,))
             await runtime.run(name, monitor)
             assert runtime.diagnostics[name]["outcome"] == "clear", runtime.diagnostics[
                 name

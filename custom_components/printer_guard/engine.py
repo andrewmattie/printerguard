@@ -6,10 +6,10 @@ import math
 from dataclasses import dataclass
 from collections import deque
 from typing import Any
-from .frame_validation import verify_jpeg
+from .frame_validation import MAX_FRAME_BYTES, verify_jpeg
 
-MAX_FRAME_BYTES = 8_000_000
 CAPTURE_TIMEOUT = 15
+SUSPICION_THRESHOLD = 0.8
 
 @dataclass(frozen=True)
 class Context:
@@ -82,7 +82,7 @@ def verdict(obj: Any) -> Verdict:
     return Verdict(obj['judgeable'], float(score), obj['evidence'])
 
 def suspicious(v: Verdict) -> bool:
-    return v.judgeable and v.score >= 0.8 and bool(v.evidence.strip())
+    return v.judgeable and v.score >= SUSPICION_THRESHOLD and bool(v.evidence.strip())
 
 def safe_error_category(error: Exception) -> str:
     """Return only fixed labels, never exception text or arbitrary class names."""
@@ -130,15 +130,13 @@ class Monitor:
         self.last_notification = 'not_requested'
         self.on_started = on_started
 
-    def remember_frame(self, frame):
+    def remember_frame(self, digest: bytes) -> bool:
         """Track possible repeated input without persisting pixels or hashes."""
-        digest = hashlib.sha256(frame.content).digest()
-        repeated = digest in self.recent_frames
-        if not repeated:
-            self.recent_frames.append(digest)
-        if repeated:
+        if digest in self.recent_frames:
             self.last_freshness = 'suspected_stale'
-        return repeated
+            return True
+        self.recent_frames.append(digest)
+        return False
 
     async def send_notice(self, message, context):
         try:
@@ -163,7 +161,7 @@ class Monitor:
         current = self.context()
         return current.eligible and current.session == original.session
 
-    async def get_frame(self, seen: set[str]) -> Capture:
+    async def get_frame(self, seen: set[bytes]) -> tuple[Capture, bytes]:
         self.capture_phase = 'camera_capture'
         f = await asyncio.wait_for(self.capture(), self.capture_timeout)
         self.capture_phase = 'frame_validation'
@@ -189,12 +187,12 @@ class Monitor:
             raise FrameValidationError(reason)
         if self.clock() - f.received_at > 5:
             raise FrameValidationError('stale_receipt')
-        digest = hashlib.sha256(f.content).hexdigest()
+        digest = hashlib.sha256(f.content).digest()
         if digest in seen:
             self.last_freshness = 'suspected_stale'
             raise FrameValidationError('duplicate_frame')
         seen.add(digest)
-        return f
+        return f, digest
 
     async def run(self) -> str:
         if self.lock.locked():
@@ -218,12 +216,13 @@ class Monitor:
                     self.recent_frames.clear()
                     self.history_job = initial.job
                 self.on_started(new_job)
-                seen: set[str] = set()
+                seen: set[bytes] = set()
                 phase = 'camera_capture'
-                f = await self.get_frame(seen); frames.append(f)
+                f, digest = await self.get_frame(seen)
+                frames.append(f)
                 phase = 'session_check'
                 if not self.same_session(initial): return 'session_changed'
-                repeated = self.remember_frame(f)
+                repeated = self.remember_frame(digest)
                 phase = 'screen_ai'
                 first_raw = await asyncio.wait_for(self.screen(f, initial.telemetry), self.inference_timeout)
                 phase = 'screen_verdict'
@@ -235,7 +234,7 @@ class Monitor:
                 # bytes cannot refresh usable health or escalate to an alert.
                 self.last_unjudgeable_reasons = tuple(label for label, applies in (
                     ('model_reported', not first.judgeable),
-                    ('missing_evidence', first.score >= 0.8 and not first.evidence.strip()),
+                    ('missing_evidence', first.score >= SUSPICION_THRESHOLD and not first.evidence.strip()),
                 ) if applies)
                 judgeable = not self.last_unjudgeable_reasons
                 self.last_assessment = 'unjudgeable' if not judgeable else 'suspicious' if suspicious(first) else 'clear'
@@ -249,10 +248,11 @@ class Monitor:
                     await self.sleep(self.interval)
                     if not self.same_session(initial): return 'session_changed'
                     phase = 'camera_capture'
-                    f = await self.get_frame(seen)
+                    f, digest = await self.get_frame(seen)
                     phase = 'session_check'
                     if not 15 <= f.received_at - frames[-1].received_at <= 75: return 'stale_gap'
-                    if self.remember_frame(f): return 'repeated_view'
+                    if self.remember_frame(digest):
+                        return 'repeated_view'
                     frames.append(f)
                 if not self.same_session(initial): return 'session_changed'
                 phase = 'comparison_ai'
@@ -265,7 +265,7 @@ class Monitor:
                 assessments = [verdict(x) for x in raw]
                 self.last_unjudgeable_reasons = tuple(label for label, applies in (
                     ('model_reported', any(not item.judgeable for item in assessments)),
-                    ('missing_evidence', any(item.score >= 0.8 and not item.evidence.strip() for item in assessments)),
+                    ('missing_evidence', any(item.score >= SUSPICION_THRESHOLD and not item.evidence.strip() for item in assessments)),
                 ) if applies)
                 if self.last_unjudgeable_reasons:
                     self.last_assessment = 'unjudgeable'

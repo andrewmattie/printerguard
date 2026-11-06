@@ -1,6 +1,7 @@
 """Decode bounded JPEGs in a worker; never return decoder error messages."""
 from io import BytesIO
 
+MAX_FRAME_BYTES = 8_000_000
 MAX_DIMENSION = 4096
 MAX_PIXELS = 12_000_000
 
@@ -25,9 +26,6 @@ def verify_jpeg(content: bytes) -> str | None:
                 return 'frame_dimensions_exceeded'
             if pixels > MAX_PIXELS:
                 return 'frame_pixel_limit_exceeded'
-            image.verify()
-        # verify() does not decode JPEG entropy data. Reopen and load it too.
-        with Image.open(BytesIO(content), formats=['JPEG']) as image:
             image.load()
     except (Image.DecompressionBombError, Image.DecompressionBombWarning):
         return 'frame_pixel_limit_exceeded'
