@@ -1,6 +1,5 @@
 """Decode bounded JPEGs in a worker; never return decoder error messages."""
 from io import BytesIO
-import warnings
 
 MAX_DIMENSION = 4096
 MAX_PIXELS = 12_000_000
@@ -16,18 +15,20 @@ def verify_jpeg(content: bytes) -> str | None:
     from PIL import Image
 
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter('error', Image.DecompressionBombWarning)
-            with Image.open(BytesIO(content), formats=['JPEG']) as image:
-                width, height = image.size
-                if width <= 0 or height <= 0 or max(width, height) > MAX_DIMENSION:
-                    return 'frame_dimensions_exceeded'
-                if width * height > MAX_PIXELS:
-                    return 'frame_pixel_limit_exceeded'
-                image.verify()
-            # verify() does not decode JPEG entropy data. Reopen and load it too.
-            with Image.open(BytesIO(content), formats=['JPEG']) as image:
-                image.load()
+        with Image.open(BytesIO(content), formats=['JPEG']) as image:
+            width, height = image.size
+            pixels = width * height
+            pillow_limit = Image.MAX_IMAGE_PIXELS
+            if pillow_limit is not None and pixels > pillow_limit:
+                return 'frame_pixel_limit_exceeded'
+            if width <= 0 or height <= 0 or max(width, height) > MAX_DIMENSION:
+                return 'frame_dimensions_exceeded'
+            if pixels > MAX_PIXELS:
+                return 'frame_pixel_limit_exceeded'
+            image.verify()
+        # verify() does not decode JPEG entropy data. Reopen and load it too.
+        with Image.open(BytesIO(content), formats=['JPEG']) as image:
+            image.load()
     except (Image.DecompressionBombError, Image.DecompressionBombWarning):
         return 'frame_pixel_limit_exceeded'
     except (OSError, ValueError, SyntaxError):

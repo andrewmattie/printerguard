@@ -267,6 +267,7 @@ def prepare(root: Path, frames):
     """Return (directory, paths, lease); the caller must retain the live lease."""
     if len(frames) not in (1, 3) or any(not isinstance(f.content, bytes) or not 4 <= len(f.content) <= MAX_SIZE for f in frames):
         raise ValueError('invalid frame count or size')
+    root = root.resolve(strict=True)
     directory = Path(tempfile.mkdtemp(prefix=PREFIX, dir=root))
     lease = None
     try:

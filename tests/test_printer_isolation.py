@@ -36,7 +36,7 @@ class IsolationTests(unittest.TestCase):
 class CameraTests(unittest.IsolatedAsyncioTestCase):
     async def test_unsupported_camera_format_is_bounded_and_does_not_expose_metadata(self):
         module = types.ModuleType('homeassistant.components.camera')
-        async def image(hass, camera):
+        async def image(hass, camera, timeout=10):
             return SimpleNamespace(content_type='synthetic-private-content-type',content=b'synthetic-private-data')
         module.async_get_image = image
         with patch.dict(sys.modules,{'homeassistant.components.camera':module}):

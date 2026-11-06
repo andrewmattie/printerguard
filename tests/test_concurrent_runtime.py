@@ -47,7 +47,7 @@ class ConcurrentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         ticks = {printer.prefix: 0.0 for printer in SETTINGS.printers}
         captures = {printer.prefix: 0 for printer in SETTINGS.printers}
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
 
             class Services:
                 async def async_call(inner, domain, service, data, **kwargs):

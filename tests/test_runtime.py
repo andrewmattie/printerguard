@@ -42,7 +42,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((second/'other.txt').exists())
     async def test_byte_quota_is_global(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             stage = Staging(root)
             stage.startup()
             frame = SimpleNamespace(content=b'x' * 16)
