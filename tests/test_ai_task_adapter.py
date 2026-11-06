@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from types import SimpleNamespace
 
@@ -19,6 +20,46 @@ class Bus:
         if self.fail: raise RuntimeError('failure')
         return {'data':{f'frame_{i}_{k}':v for i in range(1,len(self.paths)+1) for k,v in [('judgeable',True),('score',.9),('evidence','visible')]}}
 class Tests(unittest.IsolatedAsyncioTestCase):
+    async def test_repeated_cancellation_waits_for_preparation_and_cleanup(self):
+        await self.check_repeated_file_cancellation('prepare')
+
+    async def test_repeated_cancellation_waits_for_cleanup(self):
+        await self.check_repeated_file_cancellation('cleanup')
+
+    async def check_repeated_file_cancellation(self, operation):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            stage=staging(root)
+            started=asyncio.Event()
+            finished=asyncio.Event()
+            release=threading.Event()
+            loop=asyncio.get_running_loop()
+            original=getattr(stage,operation)
+            def blocked(*args):
+                if operation == 'prepare':
+                    result=original(*args)
+                loop.call_soon_threadsafe(started.set)
+                if not release.wait(5): raise TimeoutError('synthetic test gate')
+                if operation == 'cleanup':
+                    result=original(*args)
+                loop.call_soon_threadsafe(finished.set)
+                return result
+            setattr(stage,operation,blocked)
+            adapter=mod.AITaskAdapter(SimpleNamespace(services=Bus(root)),'ai_task.example',stage)
+            task=asyncio.create_task(adapter.screen(SimpleNamespace(content=b'1234'),{}))
+            try:
+                await asyncio.wait_for(started.wait(),2)
+                for _ in range(2):
+                    task.cancel()
+                    for _ in range(3): await asyncio.sleep(0)
+                self.assertFalse(task.done(),'caller returned while private disk work was still running')
+            finally:
+                release.set()
+                with self.assertRaises(asyncio.CancelledError): await task
+                await asyncio.wait_for(finished.wait(),2)
+            self.assertEqual(list(root.iterdir()),[])
+            self.assertEqual(stage.active,{})
+
     async def test_cleanup_after_service_cancellation(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); started=asyncio.Event()

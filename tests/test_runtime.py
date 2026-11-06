@@ -9,7 +9,9 @@ import types
 
 sys.path.insert(0,str(Path(__file__).parents[1]/'custom_components'))
 from p1s_guard import CONFIG_SCHEMA, Runtime, async_setup, diagnostic_outcome
-from guard_fixtures import SETTINGS, example_config
+from p1s_guard.config import parse_config
+from p1s_guard.engine import Capture
+from guard_fixtures import SETTINGS, example_config, synthetic_jpeg
 from p1s_guard.latch import Latch
 from p1s_guard.media import prepare, recover, Staging
 
@@ -216,6 +218,65 @@ class Tests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_full_configured_runtime_only_calls_ai_and_notify_for_each_printer(self):
+        from datetime import datetime, timezone
+        config=example_config()
+        config['ai_task']='ai_task.review_vision'
+        config['notify_service']='notify.review_channel'
+        config['printers']=[
+            {'name':'Alpha','entity_prefix':'alpha','camera':'camera.alpha_view'},
+            {'name':'Beta','entity_prefix':'beta','camera':'camera.beta_view'},
+        ]
+        settings=parse_config(config)
+        calls=[]
+        class Bus:
+            async def async_call(self,domain,service,data,**kwargs):
+                calls.append((domain,service,data))
+                if (domain,service)==('ai_task','generate_data'):
+                    return {'data':{
+                        f'frame_{index}_{key}':value
+                        for index in range(1,len(data['attachments'])+1)
+                        for key,value in [('judgeable',True),('score',0.9),('evidence','synthetic assessment')]
+                    }}
+                if (domain,service)!=('notify','review_channel'):
+                    raise AssertionError('unexpected service')
+        states={}
+        now=datetime.now(timezone.utc)
+        for printer in settings.printers:
+            for domain,suffix,value in [('sensor','print_status','running'),('sensor','current_stage','printing'),('binary_sensor','online','on'),('binary_sensor','print_error','off'),('sensor','task_name','example job'),('sensor','start_time','example start')]:
+                states[printer.entity(domain,suffix)]=SimpleNamespace(state=value,last_changed=now)
+            states[printer.camera]=SimpleNamespace(state='idle',last_changed=now)
+        ticks=[0.0]
+        captures={printer.prefix:0 for printer in settings.printers}
+        async def capture(hass,printer):
+            captures[printer.prefix]+=1
+            index=captures[printer.prefix]
+            # Distinct bytes and test-only trusted IDs must still never arm HA.
+            return Capture(synthetic_jpeg(index),ticks[0],f'{printer.prefix}-{index}')
+        async def advance(seconds): ticks[0]+=seconds
+        async def forbidden(*args): raise AssertionError('pause reservation must remain unused')
+        with tempfile.TemporaryDirectory() as directory:
+            hass=SimpleNamespace(states=states,services=Bus())
+            runtime=Runtime(hass,Path(directory),SimpleNamespace(reserve=forbidden),settings)
+            runtime.staging.startup()
+            with patch('p1s_guard.camera_capture',capture):
+                for name,monitor in runtime.jobs.items():
+                    monitor.clock=lambda:ticks[0]
+                    monitor.sleep=advance
+                    await runtime.run(name,monitor)
+                    self.assertEqual(runtime.diagnostics[name]['outcome'],'comparison_success')
+                    self.assertFalse(monitor.allow_pause)
+            self.assertEqual(captures,{'alpha':3,'beta':3})
+            self.assertEqual(list(Path(directory).iterdir()),[])
+            self.assertEqual(runtime.staging.active,{})
+        ai=[data for domain,service,data in calls if domain=='ai_task']
+        notifications=[data for domain,service,data in calls if domain=='notify']
+        self.assertEqual(len(calls),6)
+        self.assertEqual(len(ai),4)
+        self.assertTrue(all(data['entity_id']=='ai_task.review_vision' for data in ai))
+        self.assertEqual([data['title'] for data in notifications],['Alpha print check','Beta print check'])
+        self.assertTrue(all('No pause was sent' in data['message'] for data in notifications))
+
     async def test_startup_failure_does_not_log_exception_text_or_paths(self):
         modules={name:types.ModuleType(name) for name in ('homeassistant','homeassistant.const','homeassistant.core','homeassistant.helpers','homeassistant.helpers.event','homeassistant.helpers.storage','homeassistant.helpers.discovery')}
         modules['homeassistant.const'].EVENT_HOMEASSISTANT_STOP='stop'
