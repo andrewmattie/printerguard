@@ -1,6 +1,7 @@
 """POSIX crash/race tests using isolated directories and disposable local workers."""
 from concurrent.futures import ThreadPoolExecutor
 import os
+import errno
 from pathlib import Path
 import selectors
 import subprocess
@@ -29,7 +30,19 @@ sys.path.insert(0,sys.argv[2])
 from p1s_guard import media
 stage=media.Staging(Path(sys.argv[1])); stage.startup()
 directory, paths=stage.prepare([SimpleNamespace(content=b'1234')]*3)
-if sys.argv[3]=='cleanup':
+if sys.argv[3] in ('terminal','linked','removed'):
+    operation=sys.argv[3]
+    name={'terminal':'unlink','linked':'link','removed':'rmdir'}[operation]
+    original=getattr(media.os,name)
+    def interrupted(*args,**kwargs):
+        result=original(*args,**kwargs)
+        if operation!='terminal' or args[0]==media.MARKER:
+            print('ready',flush=True)
+            signal.pause()
+        return result
+    setattr(media.os,name,interrupted)
+    stage.cleanup(directory)
+elif sys.argv[3]=='cleanup':
     original=media.os.unlink
     def interrupted(name,*args,**kwargs):
         original(name,*args,**kwargs)
@@ -57,6 +70,139 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(media.recover(root),0)
             first.cleanup(directory); second.cleanup(other)
             self.assertEqual(list(root.iterdir()),[])
+
+    def test_ambiguous_candidate_does_not_prevent_other_owned_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            ambiguous=root/'p1s_guard_tmp_abcdefgh'; ambiguous.mkdir()
+            unrelated=ambiguous/'frame_1.jpg'; unrelated.write_bytes(b'keep')
+            first,_=abandoned(root); second,_=abandoned(root)
+            original=Path.iterdir
+            def ordered(path):
+                return iter([ambiguous,first,second]) if path==root else original(path)
+            stage=media.Staging(root)
+            with patch.object(Path,'iterdir',ordered):
+                with self.assertRaises(media.RecoveryError) as failure: stage.startup()
+            self.assertEqual((failure.exception.removed,failure.exception.failed),(2,1))
+            self.assertEqual(str(failure.exception),'staging recovery requires attention')
+            self.assertFalse(first.exists()); self.assertFalse(second.exists())
+            self.assertEqual(unrelated.read_bytes(),b'keep'); self.assertTrue(stage.blocked)
+
+    def test_terminal_record_recovers_process_kills_at_each_boundary(self):
+        for operation in ('linked','terminal','removed'):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary); unrelated=root/'unrelated.txt'; unrelated.write_text('keep')
+                command=[sys.executable,'-c',WORKER,str(root),str(Path(__file__).parents[1]/'custom_components'),operation]
+                with subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) as process:
+                    try:
+                        with selectors.DefaultSelector() as selector:
+                            selector.register(process.stdout,selectors.EVENT_READ)
+                            self.assertTrue(selector.select(3),'worker did not become ready')
+                        self.assertEqual(process.stdout.readline().strip(),'ready')
+                        self.assertEqual(list(root.rglob('frame_*.jpg')),[])
+                        self.assertEqual(media.recover(root),0)
+                        process.kill(); process.wait(timeout=3)
+                        self.assertEqual(media.recover(root),1)
+                        self.assertEqual(media.recover(root),0)
+                        self.assertEqual(list(root.iterdir()),[unrelated])
+                        self.assertEqual(unrelated.read_text(),'keep')
+                    finally:
+                        if process.poll() is None: process.kill(); process.wait(timeout=3)
+
+    def test_rmdir_failure_keeps_recoverable_record_and_retry_works(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); stage=media.Staging(root); stage.startup()
+            directory,_=stage.prepare([SimpleNamespace(content=b'1234')])
+            with patch.object(media.os,'rmdir',side_effect=OSError(errno.EACCES,'private failure')):
+                with self.assertRaises(OSError): stage.cleanup(directory)
+            self.assertTrue(directory.exists()); self.assertEqual(list(directory.iterdir()),[])
+            self.assertEqual(len(list(root.glob(media.TERMINAL_PREFIX+'*'))),1)
+            self.assertTrue(stage.blocked); self.assertEqual(media.recover(root),0)
+            stage.cleanup(directory)
+            self.assertEqual(list(root.iterdir()),[])
+
+    def test_terminal_record_never_removes_replacement_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); stage=media.Staging(root); stage.startup()
+            directory,_=stage.prepare([SimpleNamespace(content=b'1234')])
+            with patch.object(media.os,'rmdir',side_effect=OSError('synthetic failure')):
+                with self.assertRaises(OSError): stage.cleanup(directory)
+            stage.active[directory].lease.close()
+            saved=root/'saved_empty'; directory.rename(saved)
+            directory.mkdir(); unrelated=directory/'unrelated.txt'; unrelated.write_text('keep')
+            with self.assertRaises(media.RecoveryError): media.recover(root)
+            self.assertEqual(unrelated.read_text(),'keep'); self.assertTrue(saved.exists())
+
+    def test_terminal_collision_never_overwrites_an_unrelated_record(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); stage=media.Staging(root); stage.startup()
+            directory,paths=stage.prepare([SimpleNamespace(content=b'1234')])
+            collision=root/(media.TERMINAL_PREFIX+directory.name[len(media.PREFIX):])
+            collision.write_bytes(b'keep')
+            with self.assertRaises(ValueError): stage.cleanup(directory)
+            self.assertEqual(collision.read_bytes(),b'keep')
+            self.assertTrue(paths[0].exists())
+
+    def test_link_sync_and_terminal_unlink_failures_can_be_retried(self):
+        for failure in ('link_sync','marker_unlink','record_unlink'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary); stage=media.Staging(root); stage.startup()
+                directory,_=stage.prepare([SimpleNamespace(content=b'1234')])
+                original_sync=media.os.fsync; original_unlink=media.os.unlink
+                def sync(fd):
+                    if failure=='link_sync' and any(root.glob(media.TERMINAL_PREFIX+'*')):
+                        raise OSError('synthetic sync failure')
+                    return original_sync(fd)
+                def unlink(name,*args,**kwargs):
+                    if (failure=='marker_unlink' and name==media.MARKER or
+                            failure=='record_unlink' and str(name).startswith(media.TERMINAL_PREFIX)):
+                        raise PermissionError('synthetic unlink failure')
+                    return original_unlink(name,*args,**kwargs)
+                with patch.object(media.os,'fsync',sync), patch.object(media.os,'unlink',unlink):
+                    with self.assertRaises(OSError): stage.cleanup(directory)
+                self.assertEqual(list(root.rglob('frame_*.jpg')),[])
+                self.assertTrue(stage.blocked)
+                stage.cleanup(directory)
+                self.assertEqual(list(root.iterdir()),[])
+
+    def test_late_unrelated_content_prevents_terminal_rmdir(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); stage=media.Staging(root); stage.startup()
+            directory,_=stage.prepare([SimpleNamespace(content=b'1234')])
+            original=media.os.unlink
+            def inject(name,*args,**kwargs):
+                result=original(name,*args,**kwargs)
+                if name==media.MARKER: (directory/'unrelated.txt').write_text('keep')
+                return result
+            with patch.object(media.os,'unlink',inject):
+                with self.assertRaises(OSError): stage.cleanup(directory)
+            self.assertEqual((directory/'unrelated.txt').read_text(),'keep')
+            self.assertEqual(len(list(root.glob(media.TERMINAL_PREFIX+'*'))),1)
+            stage.active[directory].lease.close()
+            with self.assertRaises(media.RecoveryError): media.recover(root)
+            self.assertEqual((directory/'unrelated.txt').read_text(),'keep')
+
+    def test_ambiguous_terminal_records_are_preserved(self):
+        for kind in ('symlink','hardlink','malformed'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary); target=root/'unrelated.txt'; target.write_bytes(b'keep')
+                record=root/(media.TERMINAL_PREFIX+'abcdefgh')
+                if kind=='symlink': record.symlink_to(target)
+                elif kind=='hardlink': os.link(target,record)
+                else: record.write_bytes(b'synthetic-private-marker')
+                owned,_=abandoned(root)
+                with self.assertRaises(media.RecoveryError) as failure: media.recover(root)
+                self.assertEqual(failure.exception.removed,1)
+                self.assertFalse(owned.exists()); self.assertTrue(os.path.lexists(record))
+                self.assertEqual(target.read_bytes(),b'keep')
+                self.assertNotIn('private',str(failure.exception))
+
+    def test_completed_marker_without_root_link_is_recoverable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); directory,paths=abandoned(root)
+            for path in paths: path.unlink()
+            (directory/media.MARKER).write_bytes(media._terminal_content(directory.stat()))
+            self.assertEqual(media.recover(root),1); self.assertEqual(list(root.iterdir()),[])
 
     def test_process_kill_during_request_is_recovered_on_next_startup(self):
         self.check_killed_worker('prepare',3)
