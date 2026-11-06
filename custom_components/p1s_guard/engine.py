@@ -109,7 +109,7 @@ class Monitor:
     def __init__(self, *, capture, screen, compare, context, reserve, pause, notify,
                  clock, sleep=asyncio.sleep, allow_pause=False, interval=30.0,
                  capture_timeout=15.0, inference_timeout=40.0, max_frame_bytes=8_000_000,
-                 ai_phase=lambda: 'ai_service', notification_timeout=10.0):
+                 ai_phase=lambda: 'ai_service', notification_timeout=10.0, on_started=lambda new_job: None):
         self.capture, self.screen, self.compare, self.context = capture, screen, compare, context
         self.reserve, self.pause, self.notify = reserve, pause, notify
         self.clock, self.sleep, self.allow_pause, self.interval = clock, sleep, allow_pause, interval
@@ -121,6 +121,10 @@ class Monitor:
         self.recent_frames = deque(maxlen=8)
         self.history_job = None
         self.last_freshness = 'not_checked'
+        self.last_assessment = 'not_checked'
+        self.assessment_usable = False
+        self.last_notification = 'not_requested'
+        self.on_started = on_started
 
     def remember_frame(self, frame):
         """Track possible repeated input without persisting pixels or hashes."""
@@ -134,9 +138,22 @@ class Monitor:
 
     async def send_notice(self, message, context):
         try:
-            return await asyncio.wait_for(self.notify(message, context), self.notification_timeout)
+            result = await asyncio.wait_for(self.notify(message, context), self.notification_timeout)
+            self.last_notification = result if result in ('submitted','suppressed_cooldown','suppressed_session') else 'unknown'
+            return result
+        except asyncio.CancelledError:
+            self.last_notification = 'cancelled'
+            raise
         except Exception as error:
+            self.last_notification = 'timed_out' if isinstance(error,TimeoutError) else 'failed'
             raise NotificationFailure(error) from None
+        finally:
+            try:
+                same_session = self.same_session(context)
+            except Exception:
+                same_session = False
+            if not same_session or self.last_notification == 'suppressed_session':
+                self.assessment_usable = False
 
     def same_session(self, original: Context) -> bool:
         current = self.context()
@@ -182,15 +199,20 @@ class Monitor:
             frames: list[Capture] = []
             self.last_error = None
             self.last_freshness = 'not_checked'
+            self.last_assessment = 'not_checked'
+            self.assessment_usable = False
+            self.last_notification = 'not_requested'
             phase = 'context'
             try:
                 initial = self.context()
                 if not initial.eligible:
                     return 'ineligible'
                 self.last_freshness = 'unknown'
-                if initial.job != self.history_job:
+                new_job = initial.job != self.history_job
+                if new_job:
                     self.recent_frames.clear()
                     self.history_job = initial.job
+                self.on_started(new_job)
                 seen: set[str] = set()
                 phase = 'camera_capture'
                 f = await self.get_frame(seen); frames.append(f)
@@ -206,8 +228,14 @@ class Monitor:
                 if self.clock() - f.received_at > self.inference_timeout + 5: return 'stale_result'
                 # Static scenes still receive an advisory assessment. Repeated
                 # bytes cannot refresh usable health or escalate to an alert.
+                judgeable = first.judgeable and (first.score < 0.8 or bool(first.evidence.strip()))
+                self.last_assessment = 'unjudgeable' if not judgeable else 'suspicious' if suspicious(first) else 'clear'
                 if repeated: return 'repeated_view'
-                if not suspicious(first): return 'screen_clear_or_unjudgeable'
+                if not judgeable: return 'screen_unjudgeable'
+                if not suspicious(first):
+                    self.assessment_usable = True
+                    return 'screen_clear'
+                self.last_assessment = 'pending_comparison'
                 for _ in range(2):
                     await self.sleep(self.interval)
                     if not self.same_session(initial): return 'session_changed'
@@ -226,8 +254,14 @@ class Monitor:
                 if not isinstance(raw, list) or len(raw) != 3:
                     raise ValueError('invalid comparison shape')
                 assessments = [verdict(x) for x in raw]
+                if any(not item.judgeable or item.score >= 0.8 and not item.evidence.strip() for item in assessments):
+                    self.last_assessment = 'unjudgeable'
+                    return 'comparison_unjudgeable'
+                self.assessment_usable = True
                 if not all(suspicious(item) for item in assessments):
-                    return 'comparison_clear_or_unjudgeable'
+                    self.last_assessment = 'not_confirmed'
+                    return 'comparison_not_confirmed'
+                self.last_assessment = 'suspicious'
                 # Exact-byte dedup is not proof of a live camera. Never pause without
                 # trustworthy source frame IDs, and never arm by default.
                 ids = [x.source_frame_id for x in frames]
@@ -235,6 +269,8 @@ class Monitor:
                 if not self.allow_pause or not freshness_verified:
                     phase = 'notification'
                     await self.send_notice('Possible print failure; three assessments were suspicious. No pause was sent; frame freshness or automatic pause is not verified.', initial)
+                    if self.last_notification == 'suppressed_session' or not self.same_session(initial):
+                        return 'session_changed'
                     return 'monitor_only'
                 if not self.same_session(initial): return 'session_changed'
                 try:

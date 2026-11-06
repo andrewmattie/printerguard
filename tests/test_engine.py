@@ -21,14 +21,14 @@ class Fake:
     async def compare(self, frames, ctx): self.called.append('compare'); return [self.result]*3
     async def reserve(self,task,start): self.called.append('reserve'); return True
     async def pause(self): self.called.append('pause'); self.status='pause'
-    async def notify(self,msg,context): self.called.append(('notify',msg));
+    async def notify(self,msg,context): self.called.append(('notify',msg)); return 'submitted'
     def monitor(self, **kwargs):
         return e.Monitor(capture=self.capture,screen=self.screen,compare=self.compare,context=self.ctx,reserve=self.reserve,pause=self.pause,notify=self.notify,clock=self.clock,sleep=self.sleep,**kwargs)
 
 class TestEngine(unittest.IsolatedAsyncioTestCase):
     async def test_screen_clear_no_more_calls(self):
         f=Fake(); f.result={'judgeable':True,'score':.2,'evidence':'normal'}
-        self.assertEqual(await f.monitor().run(),'screen_clear_or_unjudgeable'); self.assertEqual(f.n,1)
+        self.assertEqual(await f.monitor().run(),'screen_clear'); self.assertEqual(f.n,1)
     async def test_three_frames_dry_run_never_pauses(self):
         f=Fake(); m=f.monitor(); self.assertEqual(await m.run(),'monitor_only')
         self.assertEqual(f.n,3); self.assertNotIn('pause',f.called); self.assertEqual(f.t,60)
@@ -57,6 +57,26 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
         async def no(*_): return False
         f.reserve=no
         self.assertEqual(await f.monitor(allow_pause=True).run(),'already_attempted'); self.assertNotIn('pause',f.called)
+    async def test_unjudgeable_and_empty_high_score_evidence_are_degraded(self):
+        for result in ({'judgeable':False,'score':0,'evidence':'obscured'},
+                       {'judgeable':True,'score':0.9,'evidence':' '}):
+            fake=Fake(); fake.result=result; monitor=fake.monitor()
+            self.assertEqual(await monitor.run(),'screen_unjudgeable')
+            self.assertEqual(monitor.last_assessment,'unjudgeable')
+            self.assertFalse(monitor.assessment_usable)
+            self.assertNotIn('compare',fake.called)
+
+    async def test_unjudgeable_comparison_differs_from_unconfirmed_suspicion(self):
+        for middle,expected in (({'judgeable':False,'score':0,'evidence':'obscured'},'comparison_unjudgeable'),
+                                ({'judgeable':True,'score':0.1,'evidence':'clear'},'comparison_not_confirmed')):
+            fake=Fake()
+            async def comparison(*args): return [fake.result,middle,fake.result]
+            fake.compare=comparison; monitor=fake.monitor()
+            self.assertEqual(await monitor.run(),expected)
+            self.assertEqual(monitor.assessment_usable,expected=='comparison_not_confirmed')
+            self.assertFalse(any(isinstance(call,tuple) for call in fake.called))
+            self.assertNotIn('pause',fake.called)
+
     async def test_compare_failure_no_pause(self):
         f=Fake()
         async def fail(*_): raise TimeoutError()
@@ -129,6 +149,15 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancelled.is_set()); self.assertFalse(monitor.lock.locked())
         self.assertNotIn('pause',f.called)
 
+    async def test_session_change_during_notice_cannot_refresh_usable_health(self):
+        fake=Fake()
+        async def notify(*args): fake.job='replacement'; return 'submitted'
+        fake.notify=notify; monitor=fake.monitor()
+        self.assertEqual(await monitor.run(),'session_changed')
+        self.assertEqual(monitor.last_notification,'submitted')
+        self.assertFalse(monitor.assessment_usable)
+        self.assertNotIn('pause',fake.called)
+
     async def test_notification_error_has_safe_phase(self):
         f=Fake()
         async def notify(*_): raise OSError('private payload')
@@ -183,7 +212,7 @@ class FreshnessTests(unittest.IsolatedAsyncioTestCase):
         fake=Fake(); fake.same=True
         fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
         monitor=fake.monitor()
-        self.assertEqual(await monitor.run(),'screen_clear_or_unjudgeable')
+        self.assertEqual(await monitor.run(),'screen_clear')
         self.assertEqual(monitor.last_freshness,'unknown')
         self.assertEqual(await monitor.run(),'repeated_view')
         self.assertEqual(monitor.last_freshness,'suspected_stale')
@@ -205,7 +234,7 @@ class FreshnessTests(unittest.IsolatedAsyncioTestCase):
         fake=Fake(); fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
         monitor=fake.monitor()
         for _ in range(20):
-            self.assertEqual(await monitor.run(),'screen_clear_or_unjudgeable')
+            self.assertEqual(await monitor.run(),'screen_clear')
             self.assertEqual(monitor.last_freshness,'unknown')
         self.assertEqual(len(monitor.recent_frames),8)
 
@@ -215,9 +244,9 @@ class FreshnessTests(unittest.IsolatedAsyncioTestCase):
             fake.same=True; fake.result={'judgeable':True,'score':0.1,'evidence':'clear'}
         a=first.monitor(); b=second.monitor()
         await a.run(); self.assertEqual(await a.run(),'repeated_view')
-        self.assertEqual(await b.run(),'screen_clear_or_unjudgeable')
+        self.assertEqual(await b.run(),'screen_clear')
         first.job='next job'
-        self.assertEqual(await a.run(),'screen_clear_or_unjudgeable')
+        self.assertEqual(await a.run(),'screen_clear')
         self.assertEqual(a.last_freshness,'unknown')
         self.assertEqual(len(a.recent_frames),1)
 
@@ -227,7 +256,7 @@ class FreshnessTests(unittest.IsolatedAsyncioTestCase):
         monitor=fake.monitor(); await monitor.run()
         self.assertEqual(await monitor.run(),'repeated_view')
         fake.same=False
-        self.assertEqual(await monitor.run(),'screen_clear_or_unjudgeable')
+        self.assertEqual(await monitor.run(),'screen_clear')
         self.assertEqual(monitor.last_freshness,'unknown')
         self.assertIsNone(monitor.last_error)
 

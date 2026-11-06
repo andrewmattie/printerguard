@@ -31,11 +31,23 @@ def _config_schema(config):
 # Keep the callable hook explicit for HA and static integration validation.
 CONFIG_SCHEMA = _config_schema
 
+FAILURE_PHASES=frozenset({'context','runtime','camera_capture','frame_validation','session_check',
+    'screen_ai','screen_verdict','comparison_ai','comparison_verdict','notification',
+    'ai_prepare','media_prepare','ai_request_build','ai_service','ai_response','media_cleanup','ai_other'})
+FAILURE_CATEGORIES=frozenset({'timeout','permission','not_found','os_error','validation','invalid_data','other'})
+SKIP_REASONS={'ineligible':'printer_ineligible','session_changed':'session_changed',
+    'stale_result':'assessment_expired','stale_gap':'receipt_gap','busy':'already_running',
+    'already_attempted':'already_attempted','cancelled':'cancelled'}
+DEGRADED_REASONS={'repeated_view':'repeated_view','screen_unjudgeable':'unjudgeable',
+    'comparison_unjudgeable':'unjudgeable'}
+
+
 def diagnostic_outcome(result):
-    if result == 'repeated_view': return 'degraded'
-    if result == 'screen_clear_or_unjudgeable': return 'screen_success'
-    if result in ('monitor_only', 'comparison_clear_or_unjudgeable'): return 'comparison_success'
-    if result in ('ineligible', 'session_changed', 'stale_result', 'stale_gap', 'busy', 'already_attempted'): return 'skipped'
+    if result == 'screen_clear': return 'clear'
+    if result == 'comparison_not_confirmed': return 'not_confirmed'
+    if result == 'monitor_only': return 'suspicious'
+    if result in DEGRADED_REASONS: return 'degraded'
+    if result in SKIP_REASONS: return 'skipped'
     return 'failure'
 
 class Runtime:
@@ -51,7 +63,9 @@ class Runtime:
         self.last_notice={}
         self.stopping=False
         self.unsub=None
-        self.diagnostics={p.prefix: {'outcome':'not_checked', 'last_check':None} for p in self.printers}
+        self.diagnostics={p.prefix: {'outcome':'not_checked', 'last_check':None,
+            'last_usable_assessment':None,'check_started':None,'assessment':'not_checked',
+            'notification':'not_requested','freshness':'not_checked'} for p in self.printers}
         self.diagnostic_last_publish={}
         self.observers=[]
         for printer in self.printers:
@@ -76,7 +90,8 @@ class Runtime:
                 return 'submitted'
             self.jobs[printer.prefix]=Monitor(capture=capture,screen=ai.screen,compare=ai.compare,
                 context=context,reserve=reserve,pause=pause,notify=notify,clock=time.monotonic,allow_pause=False,
-                ai_phase=lambda adapter=ai: adapter.diagnostic_phase)
+                ai_phase=lambda adapter=ai: adapter.diagnostic_phase,
+                on_started=lambda new_job,p=printer: self.check_started(p.prefix,new_job))
 
     def tick(self, _now):
         if self.stopping or time.monotonic()-self.started < 120: return
@@ -86,33 +101,71 @@ class Runtime:
             self.tasks.add(task)
             task.add_done_callback(self.tasks.discard)
 
+    def publish(self,name):
+        for observer in tuple(self.observers):
+            try: observer(name)
+            except Exception: _LOGGER.warning('Printer guard diagnostic update failed')
+
+    def check_started(self,name,new_job=False):
+        previous=self.diagnostics[name]
+        self.diagnostics[name]={
+            'outcome':'checking','last_check':previous['last_check'],
+            'last_usable_assessment':None if new_job else previous['last_usable_assessment'],
+            'check_started':datetime.now(timezone.utc).isoformat(),
+            'assessment':'not_checked','notification':'not_requested','freshness':'unknown',
+        }
+        self.publish(name)
+
     async def run(self,name,monitor):
-        unexpected=False
+        unexpected=cancelled=False
         try:
             result=await monitor.run()
+        except asyncio.CancelledError:
+            cancelled=True
+            result='cancelled'
         except Exception:
             unexpected=True
             result='unavailable_or_error'
         outcome=diagnostic_outcome(result)
-        previous=self.diagnostics[name]['outcome']
+        previous=self.diagnostics[name]
         now=time.monotonic()
         # Suppress repeated idle/ineligible writes; never hide a change or AI result.
-        if outcome != 'skipped' or previous != outcome or now-self.diagnostic_last_publish.get(name,float('-inf')) >= 900:
-            self.diagnostics[name]={'outcome':outcome, 'last_check':datetime.now(timezone.utc).isoformat()}
+        if outcome != 'skipped' or previous['outcome'] != outcome or previous.get('reason') != SKIP_REASONS.get(result) or now-self.diagnostic_last_publish.get(name,float('-inf')) >= 900:
+            completed=datetime.now(timezone.utc).isoformat()
+            diagnostic={'outcome':outcome, 'last_check':completed,
+                'last_usable_assessment':previous['last_usable_assessment'],
+                'check_started':previous['check_started'],
+                'assessment':'not_checked','notification':'not_requested','freshness':'not_checked'}
             freshness=getattr(monitor,'last_freshness',None)
             if freshness in ('not_checked','unknown','suspected_stale'):
-                self.diagnostics[name]['freshness']=freshness
+                diagnostic['freshness']=freshness
+            assessment=getattr(monitor,'last_assessment',None)
+            if assessment in ('not_checked','clear','unjudgeable','not_confirmed','suspicious','pending_comparison'):
+                diagnostic['assessment']=assessment
+            notification=getattr(monitor,'last_notification',None)
+            if notification in ('not_requested','submitted','suppressed_cooldown','suppressed_session','unknown','timed_out','failed','cancelled'):
+                diagnostic['notification']=notification
+            if (not unexpected and not cancelled and getattr(monitor,'assessment_usable',False) is True
+                    and freshness == 'unknown' and assessment in ('clear','not_confirmed','suspicious')):
+                diagnostic['last_usable_assessment']=completed
+            if result in SKIP_REASONS:
+                diagnostic['reason']=SKIP_REASONS[result]
+            elif result in DEGRADED_REASONS:
+                diagnostic['reason']=DEGRADED_REASONS[result]
             if result == 'unavailable_or_error':
-                detail=(None if unexpected else getattr(monitor,'last_error',None)) or {'phase':'runtime','category':'other'}
-                self.diagnostics[name].update({'failure_phase':detail['phase'], 'failure_category':detail['category']})
-                if detail.get('reason') in FRAME_FAILURE_REASONS:
-                    self.diagnostics[name]['failure_reason']=detail['reason']
+                detail=(None if unexpected else getattr(monitor,'last_error',None))
+                detail=detail if isinstance(detail,dict) else {}
+                diagnostic['failure_phase']=detail.get('phase') if isinstance(detail.get('phase'),str) and detail['phase'] in FAILURE_PHASES else 'runtime'
+                diagnostic['failure_category']=detail.get('category') if isinstance(detail.get('category'),str) and detail['category'] in FAILURE_CATEGORIES else 'other'
+                if isinstance(detail.get('reason'),str) and detail['reason'] in FRAME_FAILURE_REASONS:
+                    diagnostic['failure_reason']=detail['reason']
+            self.diagnostics[name]=diagnostic
             self.diagnostic_last_publish[name]=now
-            for observer in tuple(self.observers):
-                try: observer(name)
-                except Exception: _LOGGER.warning('Printer guard diagnostic update failed')
+            self.publish(name)
         if result=='unavailable_or_error':
-            _LOGGER.warning('Printer guard could not assess a configured printer; no pause was sent')
+            _LOGGER.warning('Printer guard check failed; see diagnostic labels')
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def stop(self,_event):
         self.stopping=True
