@@ -14,6 +14,10 @@ NAME = re.compile(r'^p1s_guard_tmp_[a-z0-9_]{8}$')
 FILES = {'frame_1.jpg', 'frame_2.jpg', 'frame_3.jpg'}
 MARKER = '.p1s_guard_owner'
 MARKER_CONTENT = b'p1s_guard staging v2\n'
+TERMINAL_PREFIX = '.p1s_guard_done_'
+TERMINAL_NAME = re.compile(r'^\.p1s_guard_done_[a-z0-9_]{8}$')
+TERMINAL_MAGIC = b'p1s_guard cleanup v1\n'
+MAX_MARKER_SIZE = 128
 MAX_SIZE = 8_000_000
 
 
@@ -39,11 +43,106 @@ def _same_file(left, right):
 def _verify_marker(directory_fd, lease):
     opened = os.fstat(lease.fileno())
     named = os.stat(MARKER, dir_fd=directory_fd, follow_symlinks=False)
+    content=os.pread(lease.fileno(),MAX_MARKER_SIZE+1,0)
+    terminal=_terminal_content(os.fstat(directory_fd))
     if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
-            or not _same_file(opened, named)
-            or opened.st_size != len(MARKER_CONTENT)
-            or os.pread(lease.fileno(), len(MARKER_CONTENT) + 1, 0) != MARKER_CONTENT):
+            or not _same_file(opened, named) or opened.st_size > MAX_MARKER_SIZE
+            or content not in (MARKER_CONTENT,terminal)):
         raise ValueError('staging ownership cannot be verified')
+    if content == terminal and set(os.listdir(directory_fd)) != {MARKER}:
+        raise ValueError('unexpected item in cleanup directory')
+
+
+def _terminal_content(directory_stat):
+    return TERMINAL_MAGIC + f'{directory_stat.st_dev} {directory_stat.st_ino}\n'.encode('ascii')
+
+
+def _verify_terminal(root_fd, name, lease):
+    opened=os.fstat(lease.fileno())
+    named=os.stat(name,dir_fd=root_fd,follow_symlinks=False)
+    content=os.pread(lease.fileno(),MAX_MARKER_SIZE+1,0)
+    if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink not in (1,2)
+            or not _same_file(opened,named) or opened.st_size > MAX_MARKER_SIZE
+            or not content.startswith(TERMINAL_MAGIC)):
+        raise ValueError('cleanup ownership cannot be verified')
+    identity=content[len(TERMINAL_MAGIC):]
+    if not re.fullmatch(rb'[0-9]{1,24} [0-9]{1,24}\n',identity):
+        raise ValueError('cleanup ownership cannot be verified')
+    return tuple(int(value) for value in identity.split())
+
+
+def _finish_terminal(root_fd, name, lease):
+    """Remove only the recorded inode's empty directory, then the durable record.
+
+    The record is a second link to the leased marker. It remains durable until
+    rmdir has been flushed, including across a crash after marker removal.
+    """
+    identity=_verify_terminal(root_fd,name,lease)
+    directory_name=PREFIX+name[len(TERMINAL_PREFIX):]
+    directory_fd=None
+    try:
+        try:
+            directory_fd=os.open(directory_name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root_fd)
+        except FileNotFoundError:
+            if os.fstat(lease.fileno()).st_nlink != 1:
+                raise ValueError('cleanup ownership cannot be verified') from None
+        else:
+            current=os.fstat(directory_fd)
+            if (current.st_dev,current.st_ino) != identity:
+                raise ValueError('cleanup directory identity changed')
+            entries=set(os.listdir(directory_fd))
+            if entries not in (set(),{MARKER}):
+                raise ValueError('unexpected item in cleanup directory')
+            if MARKER in entries:
+                marker=os.stat(MARKER,dir_fd=directory_fd,follow_symlinks=False)
+                if not _same_file(marker,os.fstat(lease.fileno())) or marker.st_nlink != 2:
+                    raise ValueError('cleanup ownership cannot be verified')
+                os.unlink(MARKER,dir_fd=directory_fd)
+                os.fsync(directory_fd)
+            elif os.fstat(lease.fileno()).st_nlink != 1:
+                raise ValueError('cleanup ownership cannot be verified')
+            named=os.stat(directory_name,dir_fd=root_fd,follow_symlinks=False)
+            if not _same_file(current,named):
+                raise ValueError('cleanup directory identity changed')
+            os.rmdir(directory_name,dir_fd=root_fd)
+        # Only retire the record after directory removal is durable.
+        os.fsync(root_fd)
+        _verify_terminal(root_fd,name,lease)
+        os.unlink(name,dir_fd=root_fd)
+        os.fsync(root_fd)
+        return True
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def cleanup_terminal(root: Path, name: str, lease=None):
+    if not TERMINAL_NAME.fullmatch(name):
+        raise ValueError('invalid cleanup record')
+    root_fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    opened_lease=None
+    try:
+        if lease is None:
+            try:
+                fd=os.open(name,os.O_RDWR|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=root_fd)
+            except FileNotFoundError:
+                return False
+            opened_lease=lease=_Lease(fd)
+        if not stat.S_ISREG(os.fstat(lease.fileno()).st_mode):
+            raise ValueError('cleanup ownership cannot be verified')
+        try:
+            fcntl.flock(lease.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        return _finish_terminal(root_fd,name,lease)
+    except OSError as error:
+        if error.errno in (errno.ELOOP,errno.ENOTDIR):
+            raise ValueError('cleanup ownership cannot be verified') from None
+        raise
+    finally:
+        if opened_lease is not None:
+            opened_lease.close()
+        os.close(root_fd)
 
 
 def _entries(directory_fd):
@@ -65,6 +164,10 @@ def cleanup_directory(path: Path, lease: _Lease | None = None) -> bool:
     """
     if not NAME.fullmatch(path.name) or path.is_symlink():
         raise ValueError('invalid staging directory')
+    terminal_name=TERMINAL_PREFIX+path.name[len(PREFIX):]
+    # Retry a cleanup that already crossed the durable terminal boundary.
+    if os.path.lexists(path.parent/terminal_name):
+        return cleanup_terminal(path.parent,terminal_name,lease)
     directory_fd = None
     opened_lease = None
     try:
@@ -102,10 +205,22 @@ def cleanup_directory(path: Path, lease: _Lease | None = None) -> bool:
             raise ValueError('staging content changed during cleanup')
         if not _same_file(os.fstat(directory_fd), path.stat(follow_symlinks=False)):
             raise ValueError('staging directory changed during cleanup')
-        os.unlink(MARKER, dir_fd=directory_fd)
-        os.fsync(directory_fd)
-        os.rmdir(path)
-        return True
+        # No images remain. Convert the still-leased marker into an inode-bound
+        # terminal record before removing its directory entry. A crash while
+        # writing this metadata can only leave an image-free, fail-closed remnant.
+        content=_terminal_content(os.fstat(directory_fd))
+        os.ftruncate(lease.fileno(),0)
+        if os.pwrite(lease.fileno(),content,0) != len(content):
+            raise OSError('incomplete cleanup ownership marker')
+        os.fsync(lease.fileno())
+        root_fd=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try:
+            # link() never overwrites a colliding unrelated record.
+            os.link(MARKER,terminal_name,src_dir_fd=directory_fd,dst_dir_fd=root_fd,follow_symlinks=False)
+            os.fsync(root_fd)
+            return _finish_terminal(root_fd,terminal_name,lease)
+        finally:
+            os.close(root_fd)
     except FileNotFoundError:
         if not path.exists():
             return False
@@ -121,13 +236,30 @@ def cleanup_directory(path: Path, lease: _Lease | None = None) -> bool:
             os.close(directory_fd)
 
 
+class RecoveryError(ValueError):
+    """A fixed summary after every independent recovery candidate was tried."""
+    def __init__(self, removed, failed):
+        super().__init__('staging recovery requires attention')
+        self.removed=removed
+        self.failed=failed
+
+
 def recover(root: Path) -> int:
-    """Recover verified abandoned v2 media; never delete an active lease."""
-    root = root.resolve(strict=True)
-    removed = 0
-    for path in root.iterdir():
-        if NAME.fullmatch(path.name):
-            removed += cleanup_directory(path)
+    """Try all independent records; preserve ambiguous entries and active work."""
+    root=root.resolve(strict=True)
+    removed=failed=0
+    paths=list(root.iterdir())
+    # Finish terminal records first; their directories may have no marker now.
+    for terminal in (True,False):
+        for path in paths:
+            if not (TERMINAL_NAME.fullmatch(path.name) if terminal else NAME.fullmatch(path.name)):
+                continue
+            try:
+                removed += cleanup_terminal(root,path.name) if terminal else cleanup_directory(path)
+            except (OSError,ValueError):
+                failed+=1
+    if failed:
+        raise RecoveryError(removed,failed)
     return removed
 
 
@@ -200,7 +332,7 @@ class Staging:
             self.blocked = False
 
     def prepare(self, frames):
-        size = sum(len(f.content) for f in frames) + len(MARKER_CONTENT)
+        size = sum(len(f.content) for f in frames) + MAX_MARKER_SIZE
         with self.lock:
             if self.blocked:
                 raise RuntimeError('staging disabled')
