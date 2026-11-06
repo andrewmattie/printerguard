@@ -224,6 +224,36 @@ class Tests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scheduler_recovers_after_notification_timeout_and_other_printer_runs(self):
+        from test_engine import Fake
+        first=Fake(); second=Fake(); second.result={'judgeable':True,'score':0.1,'evidence':'clear'}
+        started=asyncio.Event()
+        async def hung(_):
+            started.set()
+            await asyncio.Event().wait()
+        first.notify=hung
+        monitor=first.monitor(notification_timeout=0.01)
+        with tempfile.TemporaryDirectory() as directory:
+            hass=SimpleNamespace(async_create_task=asyncio.create_task)
+            runtime=Runtime(hass,Path(directory),Latch(FakeStore()),SETTINGS)
+            names=list(runtime.jobs)
+            runtime.jobs={names[0]:monitor,names[1]:second.monitor()}
+            runtime.started-=121
+            with self.assertLogs('p1s_guard',level='WARNING'):
+                runtime.tick(None); await started.wait()
+                await asyncio.wait_for(asyncio.gather(*tuple(runtime.tasks)),0.5)
+            self.assertFalse(monitor.lock.locked())
+            self.assertEqual(runtime.diagnostics[names[0]]['failure_phase'],'notification')
+            self.assertEqual(runtime.diagnostics[names[0]]['failure_category'],'timeout')
+            self.assertEqual(runtime.diagnostics[names[1]]['outcome'],'screen_success')
+            async def delivered(message): first.called.append(('notify',message))
+            monitor.notify=delivered
+            runtime.tick(None)
+            await asyncio.wait_for(asyncio.gather(*tuple(runtime.tasks)),0.5)
+            self.assertEqual(runtime.diagnostics[names[0]]['outcome'],'comparison_success')
+            self.assertEqual(second.n,2)
+            await runtime.stop(None)
+
     async def test_full_configured_runtime_only_calls_ai_and_notify_for_each_printer(self):
         from datetime import datetime, timezone
         config=example_config()

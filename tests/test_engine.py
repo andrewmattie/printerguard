@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 from pathlib import Path
 import sys
@@ -97,6 +98,38 @@ class TestEngine(unittest.IsolatedAsyncioTestCase):
         f.screen=fail; m=f.monitor(ai_phase=lambda:'https://secret.example/path')
         self.assertEqual(await m.run(),'unavailable_or_error')
         self.assertEqual(m.last_error,{'phase':'ai_other','category':'other'})
+    async def test_hung_notification_times_out_and_next_check_can_run(self):
+        f=Fake(); started=asyncio.Event(); active=[0]
+        async def hung(_):
+            active[0]+=1; started.set()
+            try: await asyncio.Event().wait()
+            finally: active[0]-=1
+        f.notify=hung
+        monitor=f.monitor(notification_timeout=0.01)
+        task=asyncio.create_task(monitor.run())
+        await started.wait()
+        self.assertEqual(await monitor.run(),'busy')
+        self.assertEqual(await asyncio.wait_for(task,0.5),'unavailable_or_error')
+        self.assertEqual(monitor.last_error,{'phase':'notification','category':'timeout'})
+        self.assertFalse(monitor.lock.locked()); self.assertEqual(active[0],0)
+        async def delivered(message): f.called.append(('notify',message))
+        monitor.notify=delivered
+        self.assertEqual(await monitor.run(),'monitor_only')
+        self.assertFalse(monitor.lock.locked())
+        self.assertNotIn('pause',f.called)
+
+    async def test_cancel_during_notification_releases_lock_and_callback(self):
+        f=Fake(); started=asyncio.Event(); cancelled=asyncio.Event()
+        async def hung(_):
+            started.set()
+            try: await asyncio.Event().wait()
+            finally: cancelled.set()
+        f.notify=hung; monitor=f.monitor()
+        task=asyncio.create_task(monitor.run()); await started.wait(); task.cancel()
+        with self.assertRaises(asyncio.CancelledError): await task
+        self.assertTrue(cancelled.is_set()); self.assertFalse(monitor.lock.locked())
+        self.assertNotIn('pause',f.called)
+
     async def test_notification_error_has_safe_phase(self):
         f=Fake()
         async def notify(_): raise OSError('private payload')
