@@ -1,6 +1,6 @@
 {
   "domain": "printer_guard",
-  "name": "Printer Guard (experimental)",
+  "name": "Printer Guard",
   "codeowners": [],
   "dependencies": [
     "ai_task",

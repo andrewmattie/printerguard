@@ -248,6 +248,8 @@ printer_guard_tmp_*/
 
 # Internal
 docs/internal/
+/PRIVACY.md
+/DIAGNOSTICS.md
 
 # Original integration artwork; keep all camera images ignored.
 !custom_components/printer_guard/brand/icon.png

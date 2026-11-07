@@ -32,8 +32,8 @@ def _entity(value, domain: str) -> str:
 def parse_config(value) -> Settings:
     """Reject incomplete, ambiguous or unknown settings before any monitoring.
 
-    Error messages deliberately exclude submitted values. Printer prefixes retain
-    the prototype's entity-suffix convention; camera IDs are always explicit.
+    Error messages deliberately exclude submitted values. Printer entity IDs use
+    the configured prefix and fixed suffixes; camera IDs are always explicit.
     """
     required = {'ai_task', 'notify_service', 'printers'}
     if (not isinstance(value, dict) or not required <= set(value)
