@@ -20,7 +20,7 @@ logs.
    Home Assistant's `custom_components/` folder.
 2. Set `homeassistant.media_dirs.local` to an existing, writable absolute path
    on a local POSIX filesystem. Restart Home Assistant after installing.
-3. Choose either method for each printer (at most two printers total):
+3. Choose either method for each printer (no fixed printer-count limit):
    - UI: Settings → Devices & services → Add integration → Printer Guard.
      Add one entry per printer. Use its **Configure** action to edit later.
    - YAML: merge the [YAML example](examples/configuration.yaml), validate the

@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Add a printer",
-        "description": "Name your printer, choose its camera and printer entities, then choose AI tasks and a notification action. You can add up to two printers, one at a time.",
+        "description": "Name your printer, choose its camera and printer entities, then choose AI tasks and a notification action. Add one integration entry for each printer.",
         "data": {
           "name": "Printer name",
           "camera": "Camera",
@@ -50,8 +50,7 @@
       "missing_entity": "This entity wasn't found. Set it up first or choose another.",
       "unavailable_entity": "This entity is unavailable. Restore it or choose another before saving.",
       "unsupported_ai_task": "Choose an AI Task that supports structured data and image attachments.",
-      "missing_notify_service": "This notification action wasn't found. Set it up first or choose another.",
-      "printer_limit": "Printer Guard supports up to two printers. Remove an existing printer configuration before continuing."
+      "missing_notify_service": "This notification action wasn't found. Set it up first or choose another."
     },
     "abort": {
       "already_configured": "This printer is already configured."
@@ -107,8 +106,7 @@
       "missing_entity": "This entity wasn't found. Set it up first or choose another.",
       "unavailable_entity": "This entity is unavailable. Restore it or choose another before saving.",
       "unsupported_ai_task": "Choose an AI Task that supports structured data and image attachments.",
-      "missing_notify_service": "This notification action wasn't found. Set it up first or choose another.",
-      "printer_limit": "Printer Guard supports up to two printers. Remove an existing printer configuration before continuing."
+      "missing_notify_service": "This notification action wasn't found. Set it up first or choose another."
     }
   },
   "exceptions": {
@@ -117,9 +115,6 @@
     },
     "startup_failed": {
       "message": "Printer Guard could not initialize local media or its durable state. Check the local media directory and reload."
-    },
-    "printer_limit": {
-      "message": "Printer Guard supports at most two printers total across YAML and UI. Remove another configuration before reloading."
     }
   }
 }

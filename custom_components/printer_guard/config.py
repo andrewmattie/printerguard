@@ -77,8 +77,8 @@ def parse_config(value, *, printer_id=None) -> Settings:
     screen_ai_task = _entity(value['screen_ai_task'], 'ai_task') if 'screen_ai_task' in value else None
     notify_service = _entity(value['notify_service'], 'notify')
     entries = value['printers']
-    if not isinstance(entries, list) or not 1 <= len(entries) <= 2:
-        raise ValueError('configure one or two printers')
+    if not isinstance(entries, list) or not entries:
+        raise ValueError('configure at least one printer')
     if printer_id is not None and (len(entries) != 1 or not isinstance(printer_id, str)
             or not re.fullmatch(r'[a-z0-9_.]+', printer_id)):
         raise ValueError('invalid stored printer identity')

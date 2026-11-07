@@ -8,15 +8,17 @@ from guard_fixtures import example_config
 
 
 class ConfigTests(unittest.TestCase):
-    def test_explicit_bindings_are_preserved_for_one_or_two_printers(self):
-        for count in (1, 2):
+    def test_explicit_bindings_are_preserved_without_a_count_cap(self):
+        for count in (1, 2, 3, 10, 100):
             config = example_config()
-            config['printers'] = config['printers'][:count]
+            config['printers'] = [{key: value.replace('printer_one', f'printer_{number}')
+                if key != 'name' else f'Printer {number}'
+                for key, value in config['printers'][0].items()} for number in range(count)]
             settings = parse_config(config)
             self.assertEqual(settings.ai_task, config['ai_task'])
             self.assertEqual(settings.notify_service, config['notify_service'])
             self.assertEqual(len(settings.printers), count)
-            self.assertEqual(settings.printers[0].task_name, 'sensor.printer_one_task_name')
+            self.assertEqual(settings.printers[0].task_name, 'sensor.printer_0_task_name')
 
     def test_optional_screen_task_is_explicit_and_preserves_comparison_task(self):
         config = example_config()
@@ -45,12 +47,10 @@ class ConfigTests(unittest.TestCase):
             parse_config(config)
 
     def test_entity_domains_and_printer_count_are_validated(self):
-        printers = example_config()['printers']
-        printers.append({'name': 'Printer Three', 'entity_prefix': 'printer_three', 'camera': 'camera.printer_three'})
         for key, values in {
             'ai_task': ('', None, 'camera.example', 'ai_task.', 'ai_task.bad/name'),
             'notify_service': ('', None, 'button.example', 'notify.', 'notify.bad name'),
-            'printers': ([], 'printer_one', {}, printers),
+            'printers': ([], 'printer_one', {}, None, True, ()),
         }.items():
             for value in values:
                 config = example_config()
@@ -145,6 +145,27 @@ class ConfigTests(unittest.TestCase):
         config['printers'] = config['printers'][:1]
         config['printers'][0]['print_status'] = 'sensor.replacement_status'
         self.assertEqual(parse_config(config, printer_id='printer_one').printers[0].key, 'printer_one')
+
+    def test_legacy_fleets_accept_many_printers_and_reject_late_conflicts(self):
+        config = example_config()
+        config['printers'] = [
+            {'name': f'Printer {number}', 'entity_prefix': f'printer_{number}',
+             'camera': f'camera.printer_{number}'} for number in range(20)]
+        self.assertEqual(len(parse_config(config).printers), 20)
+        for field in ('entity_prefix', 'camera'):
+            original = config['printers'][-1][field]
+            config['printers'][-1][field] = config['printers'][0][field]
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                parse_config(config)
+            config['printers'][-1][field] = original
+
+    def test_saved_ui_identity_requires_exactly_one_printer(self):
+        config = example_config()
+        with self.assertRaises(ValueError):
+            parse_config(config, printer_id='printer_one')
+        config['printers'] *= 3
+        with self.assertRaises(ValueError):
+            parse_config(config, printer_id='printer_one')
 
     def test_errors_do_not_echo_private_values(self):
         private_value = 'synthetic-private-value'
