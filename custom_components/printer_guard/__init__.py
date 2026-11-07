@@ -1,6 +1,7 @@
 """Monitor-only integration. Physical pause is deliberately unavailable."""
 from __future__ import annotations
 import asyncio
+from collections import deque
 from datetime import datetime, timedelta, timezone
 import logging
 from pathlib import Path
@@ -52,11 +53,13 @@ def diagnostic_outcome(result):
     return 'failure'
 
 class Runtime:
-    def __init__(self,hass,root,latch,settings,staging=None):
+    def __init__(self,hass,root,latch,settings,staging=None,scheduling=None):
         self.hass=hass
         self.latch=latch
         self.printers=settings.printers
         self.staging=staging or Staging(root)
+        self.scheduling=scheduling if scheduling is not None else {
+            'queue':deque(), 'active':set()}
         self.started=time.monotonic()
         self.jobs={}
         self.tasks=set()
@@ -111,7 +114,8 @@ class Runtime:
                 latch=Latch(Store(hass,1,'printer_guard.pause_latch'))
                 await latch.load()
                 resources.update(staging=staging,latch=latch)
-            return cls(hass,root,resources['latch'],settings,resources['staging'])
+            scheduling=resources.setdefault('scheduling',{'queue':deque(),'active':set()})
+            return cls(hass,root,resources['latch'],settings,resources['staging'],scheduling)
 
     def start(self):
         """Register exactly one timer and stop listener for this runtime."""
@@ -122,18 +126,61 @@ class Runtime:
         def tick(now):
             self.tick(now)
         self.unsub=async_track_time_interval(self.hass,tick,timedelta(minutes=1))
-        self.unsub_stop=self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP,self.stop)
+        async def on_stop(event):
+            # HA removes a one-shot listener before calling it. Do not try to
+            # unsubscribe it a second time from stop(). Direct unloads still do.
+            self.unsub_stop=None
+            self.scheduling['stopping']=True
+            await self.stop(event)
+        self.unsub_stop=self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP,on_stop)
 
     def tick(self, _now):
-        if self.stopping or time.monotonic()-self.started < 120: return
+        if self.stopping or self.scheduling.get('stopping') or time.monotonic()-self.started < 120: return
         for name,monitor in self.jobs.items():
             if name in self.pending or monitor.lock.locked(): continue
             self.pending.add(name)
-            task=self.hass.async_create_task(self.run(name,monitor))
-            self.tasks.add(task)
-            def completed(done,key=name):
-                self.tasks.discard(done)
-                self.pending.discard(key)
+            # Queue identities only: frames and session state are read after
+            # admission, never captured while waiting for capacity.
+            self.scheduling['queue'].append((self,name,monitor))
+        self.dispatch()
+        for runtime,name,monitor in self.scheduling['queue']:
+            if runtime is self and self.diagnostics[name]['outcome'] != 'queued':
+                # Do not churn unchanged idle diagnostics through queued/skipped.
+                # This is only a display hint: Monitor re-reads all context when
+                # admitted, including printers that became eligible meanwhile.
+                try:
+                    eligible=monitor.context().eligible
+                except Exception:
+                    eligible=True
+                if eligible:
+                    previous=self.diagnostics[name]
+                    self.diagnostics[name]={**previous,'outcome':'queued','reason':'capacity'}
+                    self.publish(name)
+
+    def dispatch(self):
+        """Admit FIFO work across all YAML/UI sources with a fixed resource budget.
+
+        One slot covers capture, AI, comparison waits and cleanup. A completed
+        printer can only rejoin at the tail on a later tick, behind every waiter.
+        No task is allocated per queued printer; only admitted work gets a task.
+        """
+        if self.scheduling.get('stopping'):
+            return
+        queue=self.scheduling['queue']
+        active=self.scheduling['active']
+        while queue and len(active) < self.staging.MAX_ACTIVE:
+            runtime,name,monitor=queue.popleft()
+            if runtime.stopping:
+                runtime.pending.discard(name)
+                continue
+            task=runtime.hass.async_create_task(runtime.run(name,monitor))
+            runtime.tasks.add(task)
+            active.add(task)
+            def completed(done,owner=runtime,key=name):
+                owner.tasks.discard(done)
+                owner.pending.discard(key)
+                active.discard(done)
+                self.dispatch()
             task.add_done_callback(completed)
 
     def publish(self,name):
@@ -216,6 +263,15 @@ class Runtime:
         if self.unsub_stop:
             self.unsub_stop()
             self.unsub_stop=None
+        # Remove only this source's queued work; other sources keep their place.
+        queue=self.scheduling['queue']
+        waiting=[item for item in queue if item[0] is self]
+        queue_copy=[item for item in queue if item[0] is not self]
+        queue.clear()
+        queue.extend(queue_copy)
+        for _,name,_ in waiting:
+            self.diagnostics[name]={**self.diagnostics[name],'outcome':'skipped','reason':'cancelled'}
+            self.publish(name)
         for task in self.tasks: task.cancel()
         if self.tasks: await asyncio.gather(*list(self.tasks),return_exceptions=True)
         self.tasks.clear()

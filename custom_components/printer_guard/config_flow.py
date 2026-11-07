@@ -32,8 +32,6 @@ def ownership_error(hass, settings, entry_id=None):
     if any(left.key == right.key or left.bindings & right.bindings
             for owner in owners+active for left in owner.printers for right in settings.printers):
         return 'printer_conflict'
-    if sum(len(owner.printers) for owner in owners)+len(settings.printers) > 2:
-        return 'printer_limit'
     return None
 
 

@@ -317,7 +317,8 @@ class Reservation:
 class Staging:
     """Shared in-process quota, plus per-directory OS leases across processes."""
     MAX_ACTIVE = 2
-    MAX_BYTES = 48_000_000
+    # Reserve enough bytes for each admitted three-frame request and marker.
+    MAX_BYTES = MAX_ACTIVE * (3 * MAX_FRAME_BYTES + MAX_MARKER_SIZE)
 
     def __init__(self, root: Path):
         import threading

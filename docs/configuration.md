@@ -1,7 +1,7 @@
 # Configuration and ownership
 
 Printer Guard supports YAML and Home Assistant UI configuration as continuing
-choices. At most two printers can be configured in total. A setup uses the same
+choices, with no fixed printer-count limit. A setup uses the same
 validated model and monitor-only runtime through either path. This does not
 claim Home Assistant Core acceptance or an Integration Quality Scale tier.
 
@@ -31,7 +31,7 @@ Configure the required entities and local media directory before opening the flo
 | `notify_service` | Notification action | Existing `notify` action accepting title and message. |
 
 Each UI entry has independent task and notification routing. YAML continues to
-share those settings among its one or two printers, exactly as before. No new
+share those settings among all its printers. No new
 runtime tuning options are introduced by this feature.
 
 Validation checks syntax, existing bindings, available camera and AI Task
@@ -65,6 +65,10 @@ of unchanged YAML in one process does not create another monitor.
 YAML-managed printers do not appear as editable UI config entries. Their
 diagnostic sensors remain available. A YAML edit is never overwritten by UI
 options, and the UI cannot rewrite `configuration.yaml`.
+
+Adding printers increases camera, AI provider, and Home Assistant workload.
+Provider quotas, assessment latency, and shared media capacity still constrain
+practical throughput; no fixed count limit is a guarantee of fleet capacity.
 
 ## Conflicts and switching methods
 
@@ -135,3 +139,19 @@ restart. Media staging and its global quotas are shared across both sources;
 startup recovery verifies owned files before monitoring. Physical printer controls
 remain disabled. No configuration path makes an AI accuracy or camera freshness
 guarantee.
+
+## Scheduling and capacity
+
+All YAML and UI printers share a first-in, first-out queue with two active
+assessments at a time. A slot covers capture, AI requests, comparison-frame waits
+and private-media cleanup. Waiting printers retain no captured images; their
+current eligibility, session and frames are checked when work starts. Eligible
+printers waiting for a slot show `queued` with reason `capacity` in their
+diagnostic sensor. Finishing work admits the next waiter without another timer
+tick, and a printer cannot accumulate duplicate queued checks.
+
+The timer considers printers once a minute after the initial two-minute startup
+delay. This is not a guaranteed per-printer checking interval: larger fleets,
+slow providers and three-frame comparisons can increase the time between checks.
+The active budget stays fixed as printers are added. Monitor-only behavior and
+per-printer notification cooldowns remain unchanged.
