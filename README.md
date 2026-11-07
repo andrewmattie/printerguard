@@ -1,62 +1,38 @@
 # Printer Guard
 
-Printer Guard is an experimental, alert-only Home Assistant integration for 3D
-printers. It uses an AI Task to check a camera frame for print failures. If the
-first frame looks suspicious, it takes two more and alerts you if the AI flags
-all three in the comparison.
+Alert-only Home Assistant integration for 3D printers. AI screens
+one camera frame; if suspicious, it compares two more about 30 seconds apart. It
+alerts only if all three frames are flagged.
 
-Checks start after a two-minute startup delay and run on a one-minute scheduler.
-The extra frames are taken about 30 seconds apart. After a notification action
-returns successfully, repeats for that printer's current job are suppressed for
-30 minutes. A new job does not inherit the previous job's cooldown; restarting HA
-resets the in-memory cooldown.
+Checks start after a two-minute delay and run every minute. After a successful
+notify action, repeats for that printer and job are suppressed for 30 minutes.
+New jobs don't inherit the cooldown; Home Assistant restarts clear it.
 
-Developed against Home Assistant Core 2026.10.4. The A1 Mini has produced a usable
-live assessment; P1S and notification-delivery verification remain incomplete.
-Test only on supervised prints. False alarms and missed failures are possible;
-keep checking the printer yourself. Different image bytes do not prove a live view.
+Developed against Home Assistant Core 2026.10.4. Validate live camera assessments
+and notification delivery in your setup.
+Supervise prints and keep checking the printer: false alarms and missed failures
+are possible. Different image bytes do not prove a live view.
 
 ## Setup
 
-You'll need a JPEG camera for each printer, an `ai_task` entity that accepts
-images and returns structured data, and a `notify.<service>` action that accepts
-`title` and `message`. Checks can send images and printer telemetry to your AI
-provider and incur charges. Read the [privacy notes](PRIVACY.md) before enabling
-monitoring.
+Configure a JPEG camera per printer, an image-capable `ai_task` returning
+structured data, and a `notify.<service>` accepting `title` and `message`. The
+provider receives frames and telemetry and may charge. Check retention, training,
+access, and billing terms. Frame narrowly; protect real images, credentials, and
+logs.
 
-1. Copy [`custom_components/printer_guard`](custom_components/printer_guard) into your
-   Home Assistant configuration directory's `custom_components/` folder.
-2. Adapt the [YAML example](examples/configuration.yaml) for one or two printers.
+1. Copy [`custom_components/printer_guard`](custom_components/printer_guard) into
+   Home Assistant's `custom_components/` folder.
+2. Merge the [YAML example](examples/configuration.yaml) for one or two printers.
    Set `homeassistant.media_dirs.local` to an existing, writable absolute path
-   on a local POSIX filesystem.
-   `ai_task` handles the follow-up comparison. Add optional `screen_ai_task` to
-   use a different AI Task for the initial single-frame check. If omitted, both
-   stages use `ai_task`. Both tasks must support images and structured data.
-3. Check the printer entities below, run Home Assistant's configuration check,
-   and restart Home Assistant.
-
-### Replacing an earlier installation
-
-Changing the integration domain is a fresh installation in Home Assistant.
-Before replacing a running installation, back up its configuration and record
-the two diagnostic entity IDs, dashboard references, and any automations that
-use them. Replace the component directory and the top-level YAML key together,
-then validate the configuration before restarting. Keep a copy of the old
-component and YAML so the previous installation can be restored if validation
-fails. Do not delete the shared media directory: inspect any old staging
-directories and cleanup records with the previous component's recovery
-procedure before removing it.
-
-After a successful configuration check and restart, confirm both diagnostics
-load under the new integration domain. Home Assistant can retain registry entries
-from the old domain; remove only those entries through Entities settings after
-checking that no dashboard, automation, script, scene, or helper still uses them.
-The new diagnostic unique IDs are different, so existing diagnostic entity IDs
-may need to be assigned to the new entries through Entities settings. Check
-monitoring outcomes after the startup delay; this does not verify alert delivery.
+   on a local POSIX filesystem. `ai_task` handles comparison; optional
+   `screen_ai_task` handles the initial frame and defaults to `ai_task`. Both
+   need image and structured-data support.
+3. Confirm the entities below, validate the configuration, and restart Home
+   Assistant.
 
 For `entity_prefix: printer_one`, the camera must be available and these entities
-must have the following states.
+must have these states:
 
 | Entity | State |
 | --- | --- |
@@ -67,11 +43,15 @@ must have the following states.
 | `sensor.printer_one_task_name` | Current job name |
 | `sensor.printer_one_start_time` | Current job start time |
 
-See [diagnostics](DIAGNOSTICS.md) for skipped checks and camera errors.
+Inspect each sensor's `assessment`, `last_usable_assessment`, `freshness`, and
+`notification` attributes. For skipped checks, verify the states above; for
+camera errors, check the feed and JPEG format. `last_check` means the check
+completed, not that the image was usable. `notification: submitted` means the
+action succeeded; verify delivery separately.
 
 ## Development
 
-Use Python 3.14.2 or newer on a POSIX host and install the development dependencies.
+Use Python 3.14.2+ on POSIX. Install development dependencies and run checks:
 
 ```sh
 python3 -m pip install -r requirements-dev.txt
