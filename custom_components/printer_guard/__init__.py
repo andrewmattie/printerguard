@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 
 from .ai_task_adapter import AITaskAdapter
-from .config import parse_config
+from .config import OPTIONAL_ENTITIES, REQUIRED_ENTITIES, parse_config
 from .engine import FRAME_FAILURE_REASONS, Monitor, safe_error_category
 from .ha_runtime import camera_capture, context_from_states
 from .latch import Latch
@@ -246,12 +246,35 @@ async def async_setup(hass,config):
     return True
 
 
+async def async_migrate_entry(hass,entry):
+    """Expand v1 UI bindings without changing identity or touching YAML."""
+    if entry.version > 2:
+        return False
+    if entry.version == 1:
+        migrated=[]
+        try:
+            for source in (entry.data,entry.options):
+                if not source:
+                    migrated.append({})
+                    continue
+                settings=parse_config(dict(source),printer_id=entry.unique_id)
+                value={key:source[key] for key in ('ai_task','notify_service','screen_ai_task') if key in source}
+                value['printers']=[{'name':printer.name,**{key:getattr(printer,key)
+                    for key in REQUIRED_ENTITIES | OPTIONAL_ENTITIES if getattr(printer,key) is not None}}
+                    for printer in settings.printers]
+                migrated.append(value)
+        except ValueError:
+            return False
+        hass.config_entries.async_update_entry(entry,data=migrated[0],options=migrated[1],version=2)
+    return True
+
+
 async def async_setup_entry(hass,entry):
     """Start one UI-owned printer; YAML and other entries reserve their bindings."""
     from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
     from .config_flow import ownership_error
     try:
-        settings=parse_config(dict(entry.options or entry.data))
+        settings=parse_config(dict(entry.options or entry.data),printer_id=entry.unique_id)
         error=ownership_error(hass,settings,entry.entry_id)
         if error:
             raise ConfigEntryError(translation_domain=DOMAIN,translation_key=error)

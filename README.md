@@ -35,17 +35,23 @@ media configuration without capturing images, calling AI or sending test alerts.
 See [configuration and ownership](docs/configuration.md) for edits, conflicts,
 switching methods and removal.
 
-For `entity_prefix: printer_one`, the camera must be available and these entities
-must have these states:
+Select each printer entity directly in the UI or YAML. Names do not need a
+shared prefix. The camera must be available, and the required entities must
+report these states for a check to run:
 
-| Entity | State |
+| Binding | State |
 | --- | --- |
-| `sensor.printer_one_print_status` | `running` |
-| `sensor.printer_one_current_stage` | `printing` |
-| `binary_sensor.printer_one_online` | `on` |
-| `binary_sensor.printer_one_print_error` | `off` |
-| `sensor.printer_one_task_name` | Current job name |
-| `sensor.printer_one_start_time` | Current job start time |
+| `print_status` | `running` |
+| `current_stage` | `printing` |
+| `online` | `on` |
+| `print_error` | `off` |
+| `task_name` | Current job name |
+| `start_time` | Current job start time |
+
+Optional telemetry entities are `current_layer`, `total_layer_count`,
+`print_progress`, `nozzle_temperature`, and `bed_temperature`. Omit any you do not
+have. Existing prefix-based YAML still works; existing UI entries are upgraded
+automatically while keeping their diagnostic identity.
 
 Inspect each sensor's `assessment`, `last_usable_assessment`, `freshness`, and
 `notification` attributes. For skipped checks, verify the states above; for

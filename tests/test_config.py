@@ -16,7 +16,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(settings.ai_task, config['ai_task'])
             self.assertEqual(settings.notify_service, config['notify_service'])
             self.assertEqual(len(settings.printers), count)
-            self.assertEqual(settings.printers[0].entity('sensor', 'task_name'), 'sensor.printer_one_task_name')
+            self.assertEqual(settings.printers[0].task_name, 'sensor.printer_one_task_name')
 
     def test_optional_screen_task_is_explicit_and_preserves_comparison_task(self):
         config = example_config()
@@ -61,7 +61,7 @@ class ConfigTests(unittest.TestCase):
     def test_printer_fields_and_unknown_controls_are_rejected(self):
         for key, values in {
             'name': ('', '   ', None, 'line\nbreak', 'x' * 81),
-            'entity_prefix': ('', None, 'sensor.example', 'with space'),
+            'print_status': ('', None, 'button.example', 'with space'),
             'camera': ('camera.', 'button.example', None),
         }.items():
             for value in values:
@@ -75,12 +75,76 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(entry=entry), self.assertRaises(ValueError):
                 parse_config(config)
 
-    def test_duplicate_printer_prefix_or_camera_is_rejected(self):
-        for key in ('entity_prefix', 'camera'):
+    def test_duplicate_printer_bindings_are_rejected(self):
+        for key in example_config()['printers'][0].keys() - {'name'}:
             config = example_config()
             config['printers'][1][key] = config['printers'][0][key]
             with self.subTest(key=key), self.assertRaises(ValueError):
                 parse_config(config)
+
+    def test_each_required_binding_and_all_entity_domains_are_validated(self):
+        from printer_guard.config import REQUIRED_ENTITIES, OPTIONAL_ENTITIES
+        for key in REQUIRED_ENTITIES:
+            config = example_config()
+            del config['printers'][0][key]
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                parse_config(config)
+        for key in REQUIRED_ENTITIES | OPTIONAL_ENTITIES:
+            for value in (None, '', 'button.wrong', 42, 'sensor.private/bad'):
+                config = example_config()
+                config['printers'][0][key] = value
+                with self.subTest(field=key, value=value), self.assertRaises(ValueError):
+                    parse_config(config)
+
+    def test_arbitrary_entities_and_omitted_telemetry(self):
+        from printer_guard.config import OPTIONAL_ENTITIES
+        config = example_config()
+        printer = config['printers'][0]
+        printer['print_status'] = 'sensor.custom_printer_activity'
+        printer['online'] = 'binary_sensor.connection_state'
+        for key in OPTIONAL_ENTITIES:
+            del printer[key]
+        parsed = parse_config(config).printers[0]
+        self.assertEqual(parsed.print_status, printer['print_status'])
+        self.assertEqual(parsed.online, printer['online'])
+        self.assertEqual(parsed.key, 'sensor.custom_printer_activity')
+        self.assertTrue(all(getattr(parsed, key) is None for key in OPTIONAL_ENTITIES))
+        self.assertEqual(len(parsed.bindings), 7)
+
+    def test_legacy_yaml_expands_without_changing_identity(self):
+        from printer_guard.config import REQUIRED_ENTITIES, OPTIONAL_ENTITIES
+        config = example_config()
+        expected = parse_config(config)
+        config['printers'] = [
+            {'name': printer.name, 'entity_prefix': printer.key, 'camera': printer.camera}
+            for printer in expected.printers]
+        self.assertEqual(parse_config(config), expected)
+        for prefix in ('', None, 'sensor.example', 'with space'):
+            config['printers'][0]['entity_prefix'] = prefix
+            with self.subTest(prefix=prefix), self.assertRaises(ValueError):
+                parse_config(config)
+        config['printers'][0]['entity_prefix'] = 'printer_one'
+        config['printers'][0]['print_status'] = 'sensor.explicit'
+        with self.assertRaises(ValueError):
+            parse_config(config)
+
+    def test_reused_roles_and_identity_collisions_are_rejected(self):
+        config = example_config()
+        config['printers'][0]['task_name'] = config['printers'][0]['print_status']
+        with self.assertRaises(ValueError):
+            parse_config(config)
+        config = example_config()
+        config['printers'][0]['print_status'] = 'sensor.alpha'
+        config['printers'][1]['print_status'] = 'sensor.alpha_print_status'
+        self.assertEqual([printer.key for printer in parse_config(config).printers], ['sensor.alpha', 'alpha'])
+        config['printers'][0]['print_status'] = 'sensor._print_status'
+        self.assertEqual(parse_config(config).printers[0].key, 'sensor._print_status')
+
+    def test_saved_ui_identity_survives_binding_edits(self):
+        config = example_config()
+        config['printers'] = config['printers'][:1]
+        config['printers'][0]['print_status'] = 'sensor.replacement_status'
+        self.assertEqual(parse_config(config, printer_id='printer_one').printers[0].key, 'printer_one')
 
     def test_errors_do_not_echo_private_values(self):
         private_value = 'synthetic-private-value'
