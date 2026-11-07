@@ -20,6 +20,7 @@ class Settings:
     ai_task: str
     notify_service: str
     printers: tuple[Printer, ...]
+    screen_ai_task: str | None = None
 
 
 def _entity(value, domain: str) -> str:
@@ -34,9 +35,12 @@ def parse_config(value) -> Settings:
     Error messages deliberately exclude submitted values. Printer prefixes retain
     the prototype's entity-suffix convention; camera IDs are always explicit.
     """
-    if not isinstance(value, dict) or set(value) != {'ai_task', 'notify_service', 'printers'}:
+    required = {'ai_task', 'notify_service', 'printers'}
+    if (not isinstance(value, dict) or not required <= set(value)
+            or set(value) - required - {'screen_ai_task'}):
         raise ValueError('ai_task, notify_service and printers are required')
     ai_task = _entity(value['ai_task'], 'ai_task')
+    screen_ai_task = _entity(value['screen_ai_task'], 'ai_task') if 'screen_ai_task' in value else None
     notify_service = _entity(value['notify_service'], 'notify')
     entries = value['printers']
     if not isinstance(entries, list) or not 1 <= len(entries) <= 2:
@@ -60,4 +64,4 @@ def parse_config(value) -> Settings:
         prefixes.add(prefix)
         cameras.add(camera)
         printers.append(Printer(name, prefix, camera))
-    return Settings(ai_task, notify_service, tuple(printers))
+    return Settings(ai_task, notify_service, tuple(printers), screen_ai_task)

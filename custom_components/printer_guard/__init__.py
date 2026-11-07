@@ -69,7 +69,7 @@ class Runtime:
         self.diagnostic_last_publish={}
         self.observers=[]
         for printer in self.printers:
-            ai=AITaskAdapter(hass,settings.ai_task,self.staging)
+            ai=AITaskAdapter(hass,settings.ai_task,self.staging,screen_entity_id=settings.screen_ai_task)
             async def capture(p=printer): return await camera_capture(hass,p)
             def context(p=printer): return context_from_states(hass.states,p)
             async def reserve(task,start,p=printer): return await latch.reserve(p.prefix,task,start)

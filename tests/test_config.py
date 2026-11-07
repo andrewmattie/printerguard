@@ -18,6 +18,18 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(len(settings.printers), count)
             self.assertEqual(settings.printers[0].entity('sensor', 'task_name'), 'sensor.printer_one_task_name')
 
+    def test_optional_screen_task_is_explicit_and_preserves_comparison_task(self):
+        config = example_config()
+        self.assertIsNone(parse_config(config).screen_ai_task)
+        config['screen_ai_task'] = 'ai_task.example_screen'
+        settings = parse_config(config)
+        self.assertEqual(settings.screen_ai_task, 'ai_task.example_screen')
+        self.assertEqual(settings.ai_task, config['ai_task'])
+        for value in ('', None, 42, 'camera.example', 'ai_task.', 'ai_task.bad/name'):
+            config['screen_ai_task'] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                parse_config(config)
+
     def test_missing_unknown_and_wrongly_typed_settings_are_rejected(self):
         for value in (None, {}, [], True, {'printers': []}):
             with self.subTest(value=value), self.assertRaises(ValueError):
@@ -72,11 +84,12 @@ class ConfigTests(unittest.TestCase):
 
     def test_errors_do_not_echo_private_values(self):
         private_value = 'synthetic-private-value'
-        config = example_config()
-        config['ai_task'] = private_value
-        with self.assertRaises(ValueError) as result:
-            parse_config(config)
-        self.assertNotIn(private_value, str(result.exception))
+        for key in ('ai_task', 'screen_ai_task'):
+            config = example_config()
+            config[key] = private_value
+            with self.subTest(key=key), self.assertRaises(ValueError) as result:
+                parse_config(config)
+            self.assertNotIn(private_value, str(result.exception))
 
 
 if __name__ == '__main__':

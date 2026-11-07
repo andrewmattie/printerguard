@@ -2,6 +2,9 @@
 # Merge this section with your existing configuration; do not overwrite it.
 printer_guard:
   ai_task: ai_task.example_vision
+  # Optional: use a separate task for the initial single-frame check.
+  # If omitted, ai_task is used for both stages.
+  screen_ai_task: ai_task.example_screen
   notify_service: notify.example_phone
   printers:
     - name: Printer One
