@@ -29,6 +29,9 @@ monitoring.
 2. Adapt the [YAML example](examples/configuration.yaml) for one or two printers.
    Set `homeassistant.media_dirs.local` to an existing, writable absolute path
    on a local POSIX filesystem.
+   `ai_task` handles the follow-up comparison. Add optional `screen_ai_task` to
+   use a different AI Task for the initial single-frame check. If omitted, both
+   stages use `ai_task`. Both tasks must support images and structured data.
 3. Check the printer entities below, run Home Assistant's configuration check,
    and restart Home Assistant.
 

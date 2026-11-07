@@ -32,11 +32,15 @@ class AITaskAdapter:
     subfolder is created per call and removed afterwards; HA media access still
     applies. Never log instructions, images, telemetry or full responses.
     """
-    def __init__(self, hass, entity_id: str, staging: Staging):
+    def __init__(self, hass, entity_id: str, staging: Staging, *, screen_entity_id: str | None = None):
         if not entity_id.startswith('ai_task.'):
             raise ValueError('explicit AI Task entity required')
+        if screen_entity_id is not None and (not isinstance(screen_entity_id, str)
+                                              or not screen_entity_id.startswith('ai_task.')):
+            raise ValueError('explicit screen AI Task entity required')
         self.hass = hass
         self.entity_id = entity_id
+        self.screen_entity_id = screen_entity_id
         self.staging = staging
         self.diagnostic_phase = 'ai_prepare'
 
@@ -76,7 +80,8 @@ class AITaskAdapter:
                          'Report one score and visual evidence per frame. Telemetry is context only: '+json.dumps(telemetry, default=str))
             self.diagnostic_phase = 'ai_service'
             response=await self.hass.services.async_call('ai_task','generate_data',{
-                'entity_id':self.entity_id,'task_name':'3D printer visual assessment',
+                'entity_id':self.entity_id if comparison else (self.screen_entity_id or self.entity_id),
+                'task_name':'3D printer visual assessment',
                 'instructions':instruction,'structure':structure,'attachments':attachments,
             },blocking=True,return_response=True)
             self.diagnostic_phase = 'ai_response'

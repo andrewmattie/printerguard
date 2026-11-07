@@ -524,6 +524,7 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         from datetime import datetime, timezone
         config=example_config()
         config['ai_task']='ai_task.review_vision'
+        config['screen_ai_task']='ai_task.fast_screen'
         config['notify_service']='notify.review_channel'
         config['printers']=[
             {'name':'Alpha','entity_prefix':'alpha','camera':'camera.alpha_view'},
@@ -575,7 +576,8 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         notifications=[data for domain,service,data in calls if domain=='notify']
         self.assertEqual(len(calls),6)
         self.assertEqual(len(ai),4)
-        self.assertTrue(all(data['entity_id']=='ai_task.review_vision' for data in ai))
+        self.assertEqual([(data['entity_id'],len(data['attachments'])) for data in ai],
+                         [('ai_task.fast_screen',1),('ai_task.review_vision',3)] * 2)
         self.assertEqual([data['title'] for data in notifications],['Alpha print check','Beta print check'])
         self.assertTrue(all('No pause was sent' in data['message'] for data in notifications))
 

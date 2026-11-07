@@ -29,6 +29,26 @@ class Bus:
             response = {key: value for key, value in response.items() if key.startswith('frame_1_')}
         return {'data': response}
 class Tests(unittest.IsolatedAsyncioTestCase):
+    async def test_initial_and_comparison_tasks_are_routed_independently(self):
+        for screen_task in (None, 'ai_task.example_screen'):
+            with self.subTest(screen_task=screen_task), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                calls = []
+                class RoutingBus(Bus):
+                    async def async_call(self, domain, service, data, **kwargs):
+                        calls.append((data['entity_id'], len(data['attachments'])))
+                        return await super().async_call(domain, service, data, **kwargs)
+                adapter = mod.AITaskAdapter(SimpleNamespace(services=RoutingBus(root)),
+                    'ai_task.example_comparison', staging(root), screen_entity_id=screen_task)
+                frame = SimpleNamespace(content=b'1234')
+                await adapter.screen(frame, {})
+                await adapter.compare([frame] * 3, {})
+                self.assertEqual(calls, [
+                    (screen_task or 'ai_task.example_comparison', 1),
+                    ('ai_task.example_comparison', 3),
+                ])
+                self.assertEqual(list(root.iterdir()), [])
+
     async def test_repeated_cancellation_waits_for_preparation_and_cleanup(self):
         await self.check_repeated_file_cancellation('prepare')
 

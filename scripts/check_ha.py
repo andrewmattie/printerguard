@@ -296,11 +296,11 @@ async def run_case(root, count, boundary, expect_existing_registry=False, uninst
 async def failure_case(root, kind):
     settings = configuration(1)
     marker = "synthetic_protected_configuration_value"
-    if kind == "invalid_config":
-        settings["ai_task"] = marker
+    if kind in ("invalid_config", "invalid_screen_config"):
+        settings["ai_task" if kind == "invalid_config" else "screen_ai_task"] = marker
     hass, media = await start(root, settings, missing_media=kind == "missing_media")
     try:
-        if kind in ("invalid_config", "missing_media"):
+        if kind in ("invalid_config", "invalid_screen_config", "missing_media"):
             assert "printer_guard" not in hass.data
             assert marker not in "\n".join(problems)
             outcome = "setup_disabled"
@@ -348,6 +348,7 @@ async def matrix():
     results = []
     negative = (
         "invalid_config",
+        "invalid_screen_config",
         "missing_media",
         "read_only_media",
         "unavailable_camera",
@@ -758,6 +759,79 @@ async def service_contract():
     }
 
 
+async def split_task_contract():
+    """Resolve distinct screen/comparison entities with HA's real AI Task API."""
+    from homeassistant.components.ai_task import (
+        AITaskEntity, AITaskEntityFeature, GenDataTaskResult,
+    )
+    from homeassistant.exceptions import ServiceValidationError
+
+    with tempfile.TemporaryDirectory(prefix="printguard-split-task-") as directory:
+        settings = configuration(1)
+        settings["screen_ai_task"] = "ai_task.example_screen"
+        hass, media = await start(Path(directory), settings)
+        calls = []
+
+        class SyntheticAI(AITaskEntity):
+            _attr_supported_features = (
+                AITaskEntityFeature.GENERATE_DATA | AITaskEntityFeature.SUPPORT_ATTACHMENTS
+            )
+
+            def __init__(self, name, unique_id):
+                self._attr_name = name
+                self._attr_unique_id = unique_id
+
+            async def _async_generate_data(self, task, chat_log):
+                count = len(task.attachments)
+                assert count == (1 if self.name == "Example Screen" else 3)
+                for attachment in task.attachments:
+                    assert attachment.mime_type == "image/jpeg"
+                    assert attachment.path.is_relative_to(media)
+                    assert attachment.path.read_bytes() == jpeg()
+                data = {
+                    f"frame_{index}_{key}": value
+                    for index in range(1, count + 1)
+                    for key, value in (("judgeable", True), ("score", 0.1),
+                                       ("evidence", "synthetic clear frame"))
+                }
+                assert task.structure(data) == data
+                calls.append((self.entity_id, count))
+                return GenDataTaskResult(conversation_id="synthetic_session", data=data)
+
+        try:
+            await hass.data["ai_task"].async_add_entities([
+                SyntheticAI("Example Screen", "synthetic_screen"),
+                SyntheticAI("Example Vision", "synthetic_comparison"),
+            ])
+            await hass.async_block_till_done()
+            runtime = hass.data["printer_guard"]
+            adapter = next(iter(runtime.jobs.values())).screen.__self__
+            frame = type("Frame", (), {"content": jpeg()})()
+            adapter.screen_entity_id = "ai_task.synthetic_missing"
+            try:
+                await adapter.screen(frame, {})
+            except ServiceValidationError:
+                pass
+            else:
+                raise AssertionError("missing explicit screen task must fail")
+            assert calls == [], "a missing screen task must not fall back to comparison"
+            assert not runtime.staging.active
+            assert {path.name for path in media.iterdir()} == {"unrelated.txt"}
+            adapter.screen_entity_id = settings["screen_ai_task"]
+            assert (await adapter.screen(frame, {}))["judgeable"] is True
+            assert len(await adapter.compare([frame] * 3, {})) == 3
+            assert calls == [("ai_task.example_screen", 1), ("ai_task.example_vision", 3)]
+            assert all(not monitor.allow_pause for monitor in runtime.jobs.values())
+            assert not runtime.staging.active
+            assert {path.name for path in media.iterdir()} == {"unrelated.txt"}
+        finally:
+            await hass.async_stop(force=True)
+    return {"distinct_task_routing": True, "missing_screen_no_fallback": True,
+            "screen_recovers": True, "one_and_three_attachments": True,
+            "media_cleaned": True, "fake_provider_requests": len(calls),
+            "external_provider_calls": 0, "external_notifications": 0, "printer_commands": 0}
+
+
 def main():
     global SOURCE
     parser = argparse.ArgumentParser(description=__doc__)
@@ -769,7 +843,7 @@ def main():
     parser.add_argument("--report", type=Path, help="Write a fixed-field JSON report")
     parser.add_argument(
         "--_worker",
-        choices=["matrix", "alerts", "service_contract", "install"],
+        choices=["matrix", "alerts", "service_contract", "split_task_contract", "install"],
         help=argparse.SUPPRESS,
     )
     parser.add_argument("--_source", type=Path, help=argparse.SUPPRESS)
@@ -806,6 +880,8 @@ def main():
             result = asyncio.run(alerts())
         elif arguments._worker == "service_contract":
             result = asyncio.run(service_contract())
+        elif arguments._worker == "split_task_contract":
+            result = asyncio.run(split_task_contract())
         else:
             fixture = arguments._fixture.resolve(strict=True)
             assert fixture.name == "installation"
@@ -835,7 +911,8 @@ def main():
         (root / ".synthetic-fixture").write_text("printguard synthetic data only\n")
         fixture = root / "installation"
         fixture.mkdir()
-        steps = [("matrix", SOURCE), ("alerts", SOURCE), ("service_contract", SOURCE)]
+        steps = [("matrix", SOURCE), ("alerts", SOURCE), ("service_contract", SOURCE),
+                 ("split_task_contract", SOURCE)]
         if arguments.previous:
             steps.extend(
                 [
@@ -846,7 +923,7 @@ def main():
             )
         for name, source in steps:
             mode = (
-                name if name in ("matrix", "alerts", "service_contract") else "install"
+                name if name in ("matrix", "alerts", "service_contract", "split_task_contract") else "install"
             )
             command = [
                 sys.executable,
