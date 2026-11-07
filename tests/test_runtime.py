@@ -265,12 +265,12 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                 first.writes=0; second.writes=0
                 await first.async_added_to_hass(); await second.async_added_to_hass()
                 async def clear(): return 'screen_clear'
-                await runtime.run(first.printer.prefix,SimpleNamespace(run=clear))
+                await runtime.run(first.printer.key,SimpleNamespace(run=clear))
                 self.assertEqual((first.writes,second.writes),(1,0))
                 self.assertEqual(first.native_value,'clear')
                 self.assertEqual(set(first.extra_state_attributes),{'last_check','last_usable_assessment','check_started','assessment','notification','freshness'})
                 async def unjudgeable(): return 'comparison_unjudgeable'
-                await runtime.run(first.printer.prefix,SimpleNamespace(run=unjudgeable,
+                await runtime.run(first.printer.key,SimpleNamespace(run=unjudgeable,
                     last_unjudgeable_reasons=('model_reported','missing_evidence')))
                 self.assertEqual(first.extra_state_attributes['assessment_stage'],'comparison')
                 self.assertEqual(first.extra_state_attributes['unjudgeable_reasons'],['model_reported','missing_evidence'])
@@ -278,9 +278,9 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                 async def failure(): return 'unavailable_or_error'
                 detail={'phase':'frame_validation','category':'invalid_data','reason':'duplicate_frame'}
                 with self.assertLogs('printer_guard',level='WARNING'):
-                    await runtime.run(first.printer.prefix,SimpleNamespace(run=failure,last_error=detail))
+                    await runtime.run(first.printer.key,SimpleNamespace(run=failure,last_error=detail))
                 self.assertEqual(first.extra_state_attributes['failure_reason'],'duplicate_frame')
-                await runtime.run(first.printer.prefix,SimpleNamespace(run=clear))
+                await runtime.run(first.printer.key,SimpleNamespace(run=clear))
                 self.assertNotIn('failure_reason',first.extra_state_attributes)
                 first.remove_callback(); second.remove_callback()
                 self.assertEqual(runtime.observers,[])
@@ -547,15 +547,15 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         now=datetime.now(timezone.utc)
         for printer in settings.printers:
             for domain,suffix,value in [('sensor','print_status','running'),('sensor','current_stage','printing'),('binary_sensor','online','on'),('binary_sensor','print_error','off'),('sensor','task_name','example job'),('sensor','start_time','example start')]:
-                states[printer.entity(domain,suffix)]=SimpleNamespace(state=value,last_changed=now)
+                states[getattr(printer,suffix)]=SimpleNamespace(state=value,last_changed=now)
             states[printer.camera]=SimpleNamespace(state='idle',last_changed=now)
         ticks=[0.0]
-        captures={printer.prefix:0 for printer in settings.printers}
+        captures={printer.key:0 for printer in settings.printers}
         async def capture(hass,printer):
-            captures[printer.prefix]+=1
-            index=captures[printer.prefix]
+            captures[printer.key]+=1
+            index=captures[printer.key]
             # Distinct bytes and test-only trusted IDs must still never arm HA.
-            return Capture(synthetic_jpeg(index),ticks[0],f'{printer.prefix}-{index}')
+            return Capture(synthetic_jpeg(index),ticks[0],f'{printer.key}-{index}')
         async def advance(seconds): ticks[0]+=seconds
         async def forbidden(*args): raise AssertionError('pause reservation must remain unused')
         with tempfile.TemporaryDirectory() as directory:

@@ -11,13 +11,13 @@ def context_from_states(states, printer: Printer) -> Context:
         return state.state if state is not None else 'unavailable'
 
     guard_states = tuple(states.get(entity_id) for entity_id in (
-        printer.entity('sensor', 'print_status'),
-        printer.entity('sensor', 'current_stage'),
-        printer.entity('binary_sensor', 'online'),
-        printer.entity('binary_sensor', 'print_error'),
+        printer.print_status,
+        printer.current_stage,
+        printer.online,
+        printer.print_error,
         printer.camera,
-        printer.entity('sensor', 'task_name'),
-        printer.entity('sensor', 'start_time'),
+        printer.task_name,
+        printer.start_time,
     ))
     status, stage, online, error, camera, task, start = map(val, guard_states)
     guard_epoch = tuple(
@@ -32,7 +32,8 @@ def context_from_states(states, printer: Printer) -> Context:
         ('nozzle_temperature', 'nozzle_temperature'),
         ('bed_temperature', 'bed_temperature'),
     ):
-        value = val(states.get(printer.entity('sensor', suffix)))
+        entity_id = getattr(printer, suffix)
+        value = val(states.get(entity_id)) if entity_id is not None else 'unavailable'
         telemetry[key] = None if value in ('unavailable', 'unknown') else value
     return Context(
         status=status, stage=stage, online=online == 'on',

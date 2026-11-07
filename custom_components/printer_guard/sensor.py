@@ -24,15 +24,15 @@ class GuardDiagnostic(SensorEntity):
         self.runtime=runtime
         self.printer=printer
         self._attr_name=f'{printer.name} Printer Guard'
-        self._attr_unique_id=f'printer_guard_{printer.prefix}_diagnostic'
+        self._attr_unique_id=f'printer_guard_{printer.key}_diagnostic'
 
     @property
     def native_value(self):
-        return self.runtime.diagnostics[self.printer.prefix]['outcome']
+        return self.runtime.diagnostics[self.printer.key]['outcome']
 
     @property
     def extra_state_attributes(self):
-        diagnostic=self.runtime.diagnostics[self.printer.prefix]
+        diagnostic=self.runtime.diagnostics[self.printer.key]
         return {key:diagnostic[key] for key in ('last_check','last_usable_assessment','check_started','assessment','notification','freshness','reason',
             'assessment_stage','unjudgeable_reasons','failure_phase','failure_category','failure_reason') if key in diagnostic}
 
@@ -40,7 +40,7 @@ class GuardDiagnostic(SensorEntity):
         await super().async_added_to_hass()
         @callback
         def updated(name):
-            if name == self.printer.prefix:
+            if name == self.printer.key:
                 self.async_write_ha_state()
         self.runtime.observers.append(updated)
         self.async_on_remove(lambda: self.runtime.observers.remove(updated))

@@ -26,7 +26,7 @@ def eligible_states():
             ('sensor', 'start_time', f'synthetic start {number}'),
             ('sensor', 'current_layer', str(number * 11)),
         ):
-            states[printer.entity(domain, suffix)] = SimpleNamespace(state=value, last_changed=changed)
+            states[getattr(printer,suffix)] = SimpleNamespace(state=value, last_changed=changed)
         states[printer.camera] = SimpleNamespace(state='idle', last_changed=changed)
     return states
 
@@ -44,8 +44,8 @@ class ConcurrentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         waiting = {1: set(), 3: set()}
         requests = []
         notices = []
-        ticks = {printer.prefix: 0.0 for printer in SETTINGS.printers}
-        captures = {printer.prefix: 0 for printer in SETTINGS.printers}
+        ticks = {printer.key: 0.0 for printer in SETTINGS.printers}
+        captures = {printer.key: 0 for printer in SETTINGS.printers}
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
 
@@ -85,10 +85,10 @@ class ConcurrentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             runtime.staging.startup()
 
             async def capture(_hass, printer):
-                captures[printer.prefix] += 1
-                index = captures[printer.prefix]
+                captures[printer.key] += 1
+                index = captures[printer.key]
                 base = 0 if printer == SETTINGS.printers[0] else 100
-                return Capture(synthetic_jpeg(base + index), ticks[printer.prefix])
+                return Capture(synthetic_jpeg(base + index), ticks[printer.key])
 
             for name, monitor in runtime.jobs.items():
                 monitor.clock = lambda key=name: ticks[key]
@@ -119,8 +119,8 @@ class ConcurrentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.gather(*tasks, return_exceptions=True)
             first, second = SETTINGS.printers
             if fail_first:
-                self.assertEqual(runtime.diagnostics[first.prefix]['failure_category'], 'timeout')
-                self.assertEqual(runtime.diagnostics[second.prefix]['outcome'], 'clear')
+                self.assertEqual(runtime.diagnostics[first.key]['failure_category'], 'timeout')
+                self.assertEqual(runtime.diagnostics[second.key]['outcome'], 'clear')
                 self.assertEqual(notices, [])
             else:
                 self.assertTrue(all(value['outcome'] == 'suspicious' for value in runtime.diagnostics.values()))
