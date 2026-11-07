@@ -11,6 +11,11 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     runtime=hass.data[DOMAIN]
     async_add_entities([GuardDiagnostic(runtime, printer) for printer in runtime.printers])
 
+async def async_setup_entry(hass, entry, async_add_entities):
+    runtime=entry.runtime_data
+    async_add_entities([GuardDiagnostic(runtime, printer) for printer in runtime.printers])
+
+
 class GuardDiagnostic(SensorEntity):
     _attr_should_poll=False
     _attr_entity_category=EntityCategory.DIAGNOSTIC

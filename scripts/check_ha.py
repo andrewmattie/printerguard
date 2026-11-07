@@ -843,7 +843,7 @@ def main():
     parser.add_argument("--report", type=Path, help="Write a fixed-field JSON report")
     parser.add_argument(
         "--_worker",
-        choices=["matrix", "alerts", "service_contract", "split_task_contract", "install"],
+        choices=["matrix", "alerts", "service_contract", "split_task_contract", "ui_config", "install"],
         help=argparse.SUPPRESS,
     )
     parser.add_argument("--_source", type=Path, help=argparse.SUPPRESS)
@@ -882,6 +882,10 @@ def main():
             result = asyncio.run(service_contract())
         elif arguments._worker == "split_task_contract":
             result = asyncio.run(split_task_contract())
+        elif arguments._worker == "ui_config":
+            from check_ui import run
+            with tempfile.TemporaryDirectory(prefix="printguard-ui-") as directory:
+                result = asyncio.run(run(Path(directory), start, configuration))
         else:
             fixture = arguments._fixture.resolve(strict=True)
             assert fixture.name == "installation"
@@ -912,7 +916,7 @@ def main():
         fixture = root / "installation"
         fixture.mkdir()
         steps = [("matrix", SOURCE), ("alerts", SOURCE), ("service_contract", SOURCE),
-                 ("split_task_contract", SOURCE)]
+                 ("split_task_contract", SOURCE), ("ui_config", SOURCE)]
         if arguments.previous:
             steps.extend(
                 [
@@ -923,7 +927,7 @@ def main():
             )
         for name, source in steps:
             mode = (
-                name if name in ("matrix", "alerts", "service_contract", "split_task_contract") else "install"
+                name if name in ("matrix", "alerts", "service_contract", "split_task_contract", "ui_config") else "install"
             )
             command = [
                 sys.executable,

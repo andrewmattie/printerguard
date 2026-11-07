@@ -23,13 +23,22 @@ logs.
 
 1. Copy [`custom_components/printer_guard`](custom_components/printer_guard) into
    Home Assistant's `custom_components/` folder.
-2. Merge the [YAML example](examples/configuration.yaml) for one or two printers.
-   Set `homeassistant.media_dirs.local` to an existing, writable absolute path
-   on a local POSIX filesystem. `ai_task` handles comparison; optional
-   `screen_ai_task` handles the initial frame and defaults to `ai_task`. Both
-   need image and structured-data support.
-3. Confirm the entities below, validate the configuration, and restart Home
-   Assistant.
+2. Set `homeassistant.media_dirs.local` to an existing, writable absolute path
+   on a local POSIX filesystem. Restart Home Assistant after installing.
+3. Choose either method for each printer (at most two printers total):
+   - UI: Settings → Devices & services → Add integration → Printer Guard.
+     Add one entry per printer. Use its **Configure** action to edit later.
+   - YAML: merge the [YAML example](examples/configuration.yaml), validate the
+     configuration, and restart Home Assistant. YAML remains supported and is
+     never imported, removed or rewritten automatically.
+
+`ai_task` handles comparison; optional `screen_ai_task` handles the initial frame
+and defaults to `ai_task` only when omitted. Both need image and structured-data
+support. A configured but unavailable screen task does not silently fall back.
+UI setup checks local entities, capabilities, notification action registration and
+media configuration without capturing images, calling AI or sending test alerts.
+See [configuration and ownership](docs/configuration.md) for edits, conflicts,
+switching methods and removal.
 
 For `entity_prefix: printer_one`, the camera must be available and these entities
 must have these states:

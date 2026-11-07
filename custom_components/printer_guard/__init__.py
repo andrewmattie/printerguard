@@ -14,6 +14,7 @@ from .latch import Latch
 from .media import Staging
 
 DOMAIN='printer_guard'
+RESOURCES='printer_guard_resources'
 _LOGGER=logging.getLogger(__name__)
 
 def _config_schema(config):
@@ -63,6 +64,7 @@ class Runtime:
         self.last_notice={}
         self.stopping=False
         self.unsub=None
+        self.unsub_stop=None
         self.diagnostics={p.prefix: {'outcome':'not_checked', 'last_check':None,
             'last_usable_assessment':None,'check_started':None,'assessment':'not_checked',
             'notification':'not_requested','freshness':'not_checked'} for p in self.printers}
@@ -92,6 +94,35 @@ class Runtime:
                 context=context,reserve=reserve,pause=pause,notify=notify,clock=time.monotonic,allow_pause=False,
                 ai_phase=lambda adapter=ai: adapter.diagnostic_phase,
                 on_started=lambda new_job,p=printer: self.check_started(p.prefix,new_job))
+
+    @classmethod
+    async def async_create(cls, hass, settings):
+        """Use one bounded staging area and durable latch across both sources."""
+        from homeassistant.helpers.storage import Store
+        resources=hass.data.setdefault(RESOURCES, {'lock':asyncio.Lock(), 'entries':{}})
+        async with resources['lock']:
+            media=hass.config.media_dirs.get('local')
+            if not media:
+                raise ValueError('local media required')
+            root=Path(media)
+            if 'staging' not in resources:
+                staging=Staging(root)
+                await asyncio.to_thread(staging.startup)
+                latch=Latch(Store(hass,1,'printer_guard.pause_latch'))
+                await latch.load()
+                resources.update(staging=staging,latch=latch)
+            return cls(hass,root,resources['latch'],settings,resources['staging'])
+
+    def start(self):
+        """Register exactly one timer and stop listener for this runtime."""
+        from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+        from homeassistant.helpers.event import async_track_time_interval
+        from homeassistant.core import callback
+        @callback
+        def tick(now):
+            self.tick(now)
+        self.unsub=async_track_time_interval(self.hass,tick,timedelta(minutes=1))
+        self.unsub_stop=self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP,self.stop)
 
     def tick(self, _now):
         if self.stopping or time.monotonic()-self.started < 120: return
@@ -179,12 +210,19 @@ class Runtime:
 
     async def stop(self,_event):
         self.stopping=True
-        if self.unsub: self.unsub()
+        if self.unsub:
+            self.unsub()
+            self.unsub=None
+        if self.unsub_stop:
+            self.unsub_stop()
+            self.unsub_stop=None
         for task in self.tasks: task.cancel()
         if self.tasks: await asyncio.gather(*list(self.tasks),return_exceptions=True)
+        self.tasks.clear()
+        self.pending.clear()
 
 async def async_setup(hass,config):
-    """Start only when explicitly configured; failure never alters existing checks."""
+    """Keep YAML authoritative and unchanged; no imports or file rewrites."""
     if DOMAIN not in config:
         return True
     try:
@@ -192,31 +230,79 @@ async def async_setup(hass,config):
     except ValueError:
         _LOGGER.error('Invalid Printer Guard configuration; see the repository README')
         return False
-    from homeassistant.const import EVENT_HOMEASSISTANT_STOP
-    from homeassistant.core import callback
-    from homeassistant.helpers.event import async_track_time_interval
-    from homeassistant.helpers.discovery import async_load_platform
-    from homeassistant.helpers.storage import Store
-    if DOMAIN in hass.data: return True
-    media=hass.config.media_dirs.get('local')
-    if not media:
-        _LOGGER.error('Printer guard requires a configured local media source')
-        return False
-    root=Path(media)
+    resources=hass.data.setdefault(RESOURCES, {'lock':asyncio.Lock(), 'entries':{}})
+    if DOMAIN in hass.data:
+        return True
+    resources['yaml']=settings
     try:
-        staging=Staging(root)
-        await asyncio.to_thread(staging.startup)
-        latch=Latch(Store(hass,1,'printer_guard.pause_latch'))
-        await latch.load()
+        runtime=await Runtime.async_create(hass,settings)
     except Exception as error:
         _LOGGER.error('Printer guard startup cleanup or latch loading failed (%s); monitoring disabled',safe_error_category(error))
         return False
-    runtime=Runtime(hass,root,latch,settings,staging)
     hass.data[DOMAIN]=runtime
+    from homeassistant.helpers.discovery import async_load_platform
     hass.async_create_task(async_load_platform(hass,'sensor',DOMAIN,{},config))
-    @callback
-    def tick(now):
-        runtime.tick(now)
-    runtime.unsub=async_track_time_interval(hass,tick,timedelta(minutes=1))
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP,runtime.stop)
+    runtime.start()
     return True
+
+
+async def async_setup_entry(hass,entry):
+    """Start one UI-owned printer; YAML and other entries reserve their bindings."""
+    from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
+    from .config_flow import ownership_error
+    try:
+        settings=parse_config(dict(entry.options or entry.data))
+        error=ownership_error(hass,settings,entry.entry_id)
+        if error:
+            raise ConfigEntryError(translation_domain=DOMAIN,translation_key=error)
+    except ValueError:
+        raise ConfigEntryError(translation_domain=DOMAIN,translation_key='printer_conflict') from None
+    resources=hass.data.setdefault(RESOURCES, {'lock':asyncio.Lock(), 'entries':{}})
+    if entry.entry_id in resources['entries']:
+        return True
+    try:
+        runtime=await Runtime.async_create(hass,settings)
+    except Exception:
+        raise ConfigEntryNotReady(translation_domain=DOMAIN,translation_key='startup_failed') from None
+    runtime.last_notice=resources.setdefault('notices',{}).setdefault(entry.entry_id,{})
+    entry.runtime_data=runtime
+    resources['entries'][entry.entry_id]=runtime
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry,['sensor'])
+        entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+        runtime.start()
+    except BaseException:
+        await runtime.stop(None)
+        resources['entries'].pop(entry.entry_id,None)
+        raise
+    return True
+
+
+async def async_reload_entry(hass,entry):
+    """Apply saved UI options through HA's unload/setup lifecycle."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_unload_entry(hass,entry):
+    """Stop and await private work before removing sensors and ownership."""
+    runtime=entry.runtime_data
+    await runtime.stop(None)
+    try:
+        unloaded=await hass.config_entries.async_unload_platforms(entry,['sensor'])
+    except Exception:
+        runtime.stopping=False
+        runtime.started=time.monotonic()
+        runtime.start()
+        raise
+    if not unloaded:
+        runtime.stopping=False
+        runtime.started=time.monotonic()
+        runtime.start()
+        return False
+    hass.data[RESOURCES]['entries'].pop(entry.entry_id,None)
+    return True
+
+
+async def async_remove_entry(hass,entry):
+    """Release the removed entry's bounded cooldown state, without other edits."""
+    hass.data.get(RESOURCES,{}).get('notices',{}).pop(entry.entry_id,None)

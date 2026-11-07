@@ -594,7 +594,9 @@ class ConfigurationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             with patch.dict(sys.modules,modules), patch('printer_guard.Staging.startup',fail):
                 with self.assertLogs('printer_guard',level='ERROR') as logs:
                     self.assertFalse(await async_setup(hass,{'printer_guard':example_config()}))
-            self.assertEqual(hass.data,{})
+            self.assertNotIn('printer_guard',hass.data)
+            self.assertEqual(hass.data['printer_guard_resources']['yaml'],parse_config(example_config()))
+            self.assertNotIn('staging',hass.data['printer_guard_resources'])
             self.assertIn('permission',str(logs.output))
             self.assertNotIn('synthetic-private',str(logs.output))
             self.assertNotIn('Traceback',str(logs.output))

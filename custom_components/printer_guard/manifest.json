@@ -2,6 +2,7 @@
   "domain": "printer_guard",
   "name": "Printer Guard",
   "codeowners": [],
+  "config_flow": true,
   "dependencies": [
     "ai_task",
     "camera",
