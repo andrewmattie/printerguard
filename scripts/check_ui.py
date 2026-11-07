@@ -193,8 +193,17 @@ async def run(root, start, configuration):
             assert second.runtime_data is not first.runtime_data
             assert second.runtime_data.staging is first.runtime_data.staging
             assert second.runtime_data.latch is first.runtime_data.latch
-            await expect_error(hass, form(3), "printer_limit")
-            checked.append("independent_entries_duplicate_rejection_and_printer_limit")
+            third_result = await submit(hass, form(3))
+            assert third_result["type"] == "create_entry", third_result
+            third = third_result["result"]
+            await hass.async_block_till_done()
+            assert third.state is ConfigEntryState.LOADED
+            assert third.runtime_data.staging is first.runtime_data.staging
+            assert len(third.data["printers"]) == 1
+            assert sensor_id(hass, third.unique_id)
+            await expect_error(hass, {**form(4), "camera": form(3)["camera"]}, "printer_conflict")
+            assert await hass.config_entries.async_remove(third.entry_id) == {"require_restart": False}
+            checked.append("three_independent_entries_and_duplicate_rejection")
 
             # Canceling edits preserves both saved settings and the active runtime.
             old_runtime = first.runtime_data
@@ -301,7 +310,43 @@ async def run(root, start, configuration):
         finally:
             await hass.async_stop(force=True)
 
-        yaml = configuration(1)
+        # A fleet above the active budget must survive HA's actual entry store
+        # and a cold restart without conversion, loss or identity collisions.
+        fleet_root = root / "ui-fleet-restart"
+        fleet_root.mkdir()
+        hass, media = await start(fleet_root, None)
+        try:
+            install_services(hass, calls)
+            fleet_entries = []
+            for number in range(1, 5):
+                values = form(number)
+                install_entities(hass, values)
+                created = await submit(hass, values)
+                assert created["type"] == "create_entry"
+                await hass.async_block_till_done()
+                entry = created["result"]
+                fleet_entries.append((entry.entry_id, entry.unique_id, copy.deepcopy(dict(entry.data)),
+                                      sensor_id(hass, entry.unique_id)))
+        finally:
+            await hass.async_stop(force=True)
+        hass, media = await start(fleet_root, None)
+        try:
+            assert len(hass.config_entries.async_entries(DOMAIN)) == 4
+            for entry_id, identity, data, sensor in fleet_entries:
+                entry = hass.config_entries.async_get_entry(entry_id)
+                assert entry.state is ConfigEntryState.LOADED
+                assert entry.unique_id == identity and dict(entry.data) == data
+                assert sensor_id(hass, identity) == sensor
+                assert hass.states.get(sensor)
+                assert entry.runtime_data.printers[0].key == identity
+            assert len({id(entry.runtime_data.scheduling)
+                        for entry in hass.config_entries.async_entries(DOMAIN)}) == 1
+            assert calls == [] and camera.await_count == 0
+            checked.append("four_ui_printers_survive_storage_backed_restart")
+        finally:
+            await hass.async_stop(force=True)
+
+        yaml = configuration(4)
         hass, media = await start(root, yaml)
         try:
             install_services(hass, calls)
@@ -315,7 +360,32 @@ async def run(root, start, configuration):
             await expect_error(hass, {**form(3), "camera": "camera.printer_1"}, "printer_conflict")
             assert await hass.config_entries.async_reload(first.entry_id)
             assert not hass.data[DOMAIN].stopping
-            checked.append("yaml_ui_coexist_and_yaml_duplicates_rejected")
+            assert len(hass.data[DOMAIN].printers) == 4
+            for printer in hass.data[DOMAIN].printers:
+                assert sensor_id(hass, printer.key)
+            created = await submit(hass, form(3))
+            assert created["type"] == "create_entry", created
+            await hass.async_block_till_done()
+            assert created["result"].state is ConfigEntryState.LOADED
+            assert created["result"].runtime_data.staging is hass.data[DOMAIN].staging
+            await expect_error(hass, {**form(4), "camera": "camera.printer_4"}, "printer_conflict")
+            assert await hass.config_entries.async_remove(created["result"].entry_id) == {"require_restart": False}
+            checked.append("four_yaml_and_two_ui_printers_coexist_with_conflict_checks")
+        finally:
+            await hass.async_stop(force=True)
+
+        yaml_only_root = root / "yaml-fleet"
+        yaml_only_root.mkdir()
+        hass, media = await start(yaml_only_root, configuration(5))
+        try:
+            assert not hass.config_entries.async_entries(DOMAIN)
+            runtime = hass.data[DOMAIN]
+            assert len(runtime.printers) == 5
+            assert len(runtime.jobs) == 5
+            assert len({sensor_id(hass, printer.key) for printer in runtime.printers}) == 5
+            assert all(hass.states.get(sensor_id(hass, printer.key)) for printer in runtime.printers)
+            assert calls == [] and camera.await_count == 0
+            checked.append("five_yaml_printers_have_independent_diagnostics")
         finally:
             await hass.async_stop(force=True)
 

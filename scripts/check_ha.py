@@ -837,6 +837,144 @@ async def split_task_contract():
             "external_provider_calls": 0, "external_notifications": 0, "printer_commands": 0}
 
 
+async def scheduling_contract():
+    """Use actual mixed-source lifecycle with gated, synthetic provider work."""
+    from check_ui import form, install_entities, submit
+    with tempfile.TemporaryDirectory(prefix="printguard-scheduling-") as directory:
+        hass, media = await start(Path(directory), configuration(3))
+        domain = source_domain(SOURCE)
+        capture_class = importlib.import_module(f"custom_components.{domain}.engine").Capture
+        releases = {number: asyncio.Event() for number in range(1, 7)}
+        captures = []
+        requests = []
+        running = set()
+        peak = 0
+        entries = []
+        try:
+            async def provider(call):
+                nonlocal peak
+                telemetry = json.loads(call.data["instructions"].split("Telemetry is context only: ", 1)[1])
+                number = int(telemetry["layer"])
+                attachments = call.data["attachments"]
+                assert len(attachments) == 1
+                paths = [media / item["media_content_id"].removeprefix("media-source://media_source/local/")
+                         for item in attachments]
+                assert all(path.is_file() for path in paths)
+                running.add(number)
+                peak = max(peak, len(running))
+                assert len(running) <= 2
+                requests.append(number)
+                try:
+                    await releases[number].wait()
+                    return {"data": {"frame_1_judgeable": True, "frame_1_score": 0.1,
+                                     "frame_1_evidence": "synthetic clear"}}
+                finally:
+                    running.remove(number)
+
+            async def forbidden_notice(call):
+                raise AssertionError("clear synthetic assessments must not notify")
+
+            hass.services.async_register("ai_task", "generate_data", provider,
+                                         supports_response=SupportsResponse.ONLY)
+            hass.services.async_register("notify", "synthetic_phone", forbidden_notice)
+            for number in range(1, 4):
+                values = form(number)
+                install_entities(hass, values)
+                result = await submit(hass, values)
+                assert result["type"] == "create_entry"
+                entries.append(result["result"])
+                await hass.async_block_till_done()
+            runtimes = [hass.data[domain], *(entry.runtime_data for entry in entries)]
+            scheduler = runtimes[0].scheduling
+            assert all(runtime.scheduling is scheduler for runtime in runtimes)
+            assert all(runtime.staging is runtimes[0].staging for runtime in runtimes)
+            index = 0
+            for runtime in runtimes:
+                eligible(hass, runtime)
+                runtime.started -= 121
+                for printer in runtime.printers:
+                    index += 1
+                    hass.states.async_set(printer.current_layer, str(index))
+                    async def capture(number=index):
+                        captures.append(number)
+                        return capture_class(jpeg(), time.monotonic())
+                    runtime.jobs[printer.key].capture = capture
+                runtime.tick(None)
+
+            async def reached(predicate):
+                async with asyncio.timeout(5):
+                    while not predicate():
+                        await asyncio.sleep(0)
+
+            await reached(lambda: len(requests) == 2)
+            assert captures == [1, 2]
+            assert len(scheduler["queue"]) == 4
+            assert len(runtimes[0].staging.active) == 2
+            for entry in entries:
+                diagnostic = hass.states.get(er.async_get(hass).async_get_entity_id(
+                    "sensor", domain, f"printer_guard_{entry.unique_id}_diagnostic"))
+                assert diagnostic.state == "queued" and diagnostic.attributes["reason"] == "capacity"
+            # Unload a queued UI source before it can capture or stage anything.
+            assert await hass.config_entries.async_unload(entries[2].entry_id)
+            assert len(scheduler["queue"]) == 3
+            assert not runtimes[3].pending and not runtimes[3].tasks
+            releases[1].set()
+            releases[2].set()
+            await reached(lambda: len(requests) == 4)
+            assert captures == [1, 2, 3, 4]
+            # Unload active UI work while its private media is leased. Other
+            # sources retain their place and receive the newly available slot.
+            assert await hass.config_entries.async_unload(entries[0].entry_id)
+            await reached(lambda: len(requests) == 5)
+            assert captures == [1, 2, 3, 4, 5]
+            assert not runtimes[1].pending and not runtimes[1].tasks
+            releases[3].set()
+            releases[5].set()
+            await reached(lambda: not scheduler["active"] and not scheduler["queue"])
+            assert all(not runtime.pending and not runtime.tasks for runtime in runtimes)
+            assert not runtimes[0].staging.active
+            assert list(media.iterdir()) == [media / "unrelated.txt"]
+            # Reload the cancelled source and verify it can monitor again.
+            assert await hass.config_entries.async_setup(entries[0].entry_id)
+            resumed = entries[0].runtime_data
+            assert resumed.scheduling is scheduler
+            eligible(hass, resumed)
+            install_synthetic_capture(domain, resumed.jobs.values())
+            releases[4].set()
+            resumed.started -= 121
+            resumed.tick(None)
+            await reached(lambda: not resumed.pending)
+            assert next(iter(resumed.diagnostics.values()))["outcome"] == "clear"
+            assert sorted(requests) == [1, 2, 3, 4, 4, 5]
+            assert peak == 2
+            # Stop HA with two staged jobs and more sources waiting. Shutdown
+            # must not admit another waiter as cancelled jobs release capacity.
+            for release in releases.values():
+                release.clear()
+            shutdown_runtimes = [runtimes[0], resumed, entries[1].runtime_data]
+            for runtime in shutdown_runtimes:
+                runtime.tick(None)
+            await reached(lambda: len(requests) == 8)
+            assert len(scheduler["queue"]) == 3
+            await hass.async_stop(force=True)
+            assert len(requests) == 8
+            assert all(not runtime.pending and not runtime.tasks for runtime in shutdown_runtimes)
+        finally:
+            for release in releases.values():
+                release.set()
+            await hass.async_stop(force=True)
+        assert not scheduler["active"] and not scheduler["queue"]
+        assert not runtimes[0].staging.active
+        assert not any(problem.startswith("homeassistant.core:") for problem in problems)
+        assert list(media.iterdir()) == [media / "unrelated.txt"]
+        return {"configured_printers": 6, "peak_active_requests": peak,
+                "shared_fifo_budget": True, "queued_sensor_visible": True,
+                "queued_unload_without_capture": True, "active_unload_cleanup": True,
+                "source_reload_recovers": True, "queued_shutdown_cleanup": True,
+                "no_private_media_left": True,
+                **environment_summary()}
+
+
 def main():
     global SOURCE
     parser = argparse.ArgumentParser(description=__doc__)
@@ -848,7 +986,7 @@ def main():
     parser.add_argument("--report", type=Path, help="Write a fixed-field JSON report")
     parser.add_argument(
         "--_worker",
-        choices=["matrix", "alerts", "service_contract", "split_task_contract", "ui_config", "install"],
+        choices=["matrix", "alerts", "service_contract", "split_task_contract", "ui_config", "scheduling", "install"],
         help=argparse.SUPPRESS,
     )
     parser.add_argument("--_source", type=Path, help=argparse.SUPPRESS)
@@ -887,6 +1025,8 @@ def main():
             result = asyncio.run(service_contract())
         elif arguments._worker == "split_task_contract":
             result = asyncio.run(split_task_contract())
+        elif arguments._worker == "scheduling":
+            result = asyncio.run(scheduling_contract())
         elif arguments._worker == "ui_config":
             from check_ui import run
             with tempfile.TemporaryDirectory(prefix="printguard-ui-") as directory:
@@ -921,7 +1061,7 @@ def main():
         fixture = root / "installation"
         fixture.mkdir()
         steps = [("matrix", SOURCE), ("alerts", SOURCE), ("service_contract", SOURCE),
-                 ("split_task_contract", SOURCE), ("ui_config", SOURCE)]
+                 ("split_task_contract", SOURCE), ("ui_config", SOURCE), ("scheduling", SOURCE)]
         if arguments.previous:
             steps.extend(
                 [
@@ -932,7 +1072,7 @@ def main():
             )
         for name, source in steps:
             mode = (
-                name if name in ("matrix", "alerts", "service_contract", "split_task_contract", "ui_config") else "install"
+                name if name in ("matrix", "alerts", "service_contract", "split_task_contract", "ui_config", "scheduling") else "install"
             )
             command = [
                 sys.executable,
