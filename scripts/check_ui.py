@@ -10,7 +10,7 @@ import importlib
 from unittest.mock import AsyncMock, patch
 
 from homeassistant.components.ai_task import AITaskEntityFeature
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntry, ConfigEntryDisabler, ConfigEntryState
 from homeassistant.core import ServiceRegistry, SupportsResponse
 from homeassistant.data_entry_flow import InvalidData
 from homeassistant.helpers import entity_registry as er
@@ -21,8 +21,14 @@ DOMAIN = "printer_guard"
 def form(number=1):
     return {
         "name": f"Synthetic Printer {number}",
-        "entity_prefix": f"ui_printer_{number}",
         "camera": f"camera.ui_printer_{number}",
+        **{key: f'{domain}.ui_printer_{number}_{key}' for key, domain in (
+            ('print_status', 'sensor'), ('current_stage', 'sensor'),
+            ('online', 'binary_sensor'), ('print_error', 'binary_sensor'),
+            ('task_name', 'sensor'), ('start_time', 'sensor'),
+            ('current_layer', 'sensor'), ('total_layer_count', 'sensor'),
+            ('print_progress', 'sensor'), ('nozzle_temperature', 'sensor'),
+            ('bed_temperature', 'sensor'))},
         "ai_task": "ai_task.synthetic_comparison",
         "screen_ai_task": "ai_task.synthetic_screen",
         "notify_service": "notify.synthetic_phone",
@@ -31,7 +37,6 @@ def form(number=1):
 
 def install_entities(hass, values):
     """Provide all safety bindings but leave the printer idle during setup."""
-    prefix = values["entity_prefix"]
     for domain, suffix, value in (
         ("sensor", "print_status", "idle"),
         ("sensor", "current_stage", "idle"),
@@ -40,7 +45,10 @@ def install_entities(hass, values):
         ("sensor", "task_name", "synthetic job"),
         ("sensor", "start_time", "synthetic start"),
     ):
-        hass.states.async_set(f"{domain}.{prefix}_{suffix}", value)
+        hass.states.async_set(values[suffix], value)
+    for key in ('current_layer', 'total_layer_count', 'print_progress', 'nozzle_temperature', 'bed_temperature'):
+        if key in values:
+            hass.states.async_set(values[key], '1')
     hass.states.async_set(values["camera"], "idle")
     features = int(
         AITaskEntityFeature.GENERATE_DATA | AITaskEntityFeature.SUPPORT_ATTACHMENTS
@@ -123,12 +131,13 @@ async def run(root, start, configuration):
             assert not hass.config_entries.async_entries(DOMAIN)
             checked.append("cancel_create")
 
-            for key in ("name", "entity_prefix", "camera", "ai_task", "notify_service"):
+            for key in ("name", "camera", "print_status", "current_stage", "online", "print_error", "task_name", "start_time", "ai_task", "notify_service"):
                 missing = form()
                 missing.pop(key)
                 await expect_error(hass, missing, "invalid_config")
             for key, value in (
-                ("name", " "), ("entity_prefix", "Not a prefix"),
+                ("name", " "), ("print_status", "Not an entity"),
+                ("online", "sensor.wrong_domain"), ("current_layer", "camera.wrong_domain"),
                 ("camera", "sensor.wrong_domain"), ("ai_task", "camera.wrong_domain"),
                 ("notify_service", "light.wrong_domain"),
                 ("screen_ai_task", "sensor.wrong_domain"),
@@ -136,7 +145,8 @@ async def run(root, start, configuration):
                 await expect_error(hass, {**form(), key: value}, "invalid_config")
             await expect_error(hass, {**form(), "camera": "camera.missing"}, "missing_entity")
             await expect_error(hass, {**form(), "ai_task": "ai_task.missing"}, "missing_entity")
-            await expect_error(hass, {**form(), "entity_prefix": "missing"}, "missing_printer_entities")
+            for field in ('print_status', 'current_stage', 'online', 'print_error', 'task_name', 'start_time', 'current_layer'):
+                await expect_error(hass, {**form(), field: f'{form()[field].split(".")[0]}.missing'}, "missing_entity")
             await expect_error(hass, {**form(), "notify_service": "notify.missing"}, "missing_notify_service")
             for entity in (form()["camera"], form()["ai_task"], form()["screen_ai_task"]):
                 hass.states.async_set(entity, "unavailable")
@@ -154,21 +164,27 @@ async def run(root, start, configuration):
             assert not hass.config_entries.async_entries(DOMAIN)
             checked.append("invalid_and_missing_inputs")
 
+            for field in ('task_name', 'start_time'):
+                hass.states.async_set(form()[field], 'unknown')
             first_result = await submit(hass, form())
             assert first_result["type"] == "create_entry", first_result
             first = first_result["result"]
             await hass.async_block_till_done()
             assert first.state is ConfigEntryState.LOADED
-            assert first.unique_id == form()["entity_prefix"]
+            install_entities(hass, form())
+            assert first.unique_id == "ui_printer_1"
             assert first.data["printers"] == [{
-                key: form()[key] for key in ("name", "entity_prefix", "camera")
+                key: value for key, value in form().items() if key not in ("ai_task", "screen_ai_task", "notify_service")
             }]
             assert DOMAIN not in hass.data, "UI must not occupy the YAML runtime slot"
             original_sensor = sensor_id(hass, first.unique_id)
             assert original_sensor and hass.states.get(original_sensor)
             assert er.async_get(hass).async_get(original_sensor).config_entry_id == first.entry_id
-            await expect_error(hass, {**form(2), "entity_prefix": form()["entity_prefix"]}, "printer_conflict")
+            await expect_error(hass, {**form(2), "print_status": form()["print_status"]}, "printer_conflict")
             await expect_error(hass, {**form(2), "camera": form()["camera"]}, "printer_conflict")
+            for field in ('current_stage', 'online', 'print_error', 'task_name', 'start_time',
+                          'current_layer', 'total_layer_count', 'print_progress', 'nozzle_temperature', 'bed_temperature'):
+                await expect_error(hass, {**form(2), field: form()[field]}, "printer_conflict")
             second_result = await submit(hass, form(2))
             assert second_result["type"] == "create_entry", second_result
             second = second_result["result"]
@@ -188,9 +204,12 @@ async def run(root, start, configuration):
             hass.config_entries.options.async_abort(options["flow_id"])
             assert dict(first.data) == original_data and first.runtime_data is old_runtime
             options = await hass.config_entries.options.async_init(first.entry_id)
-            edited = {**form(), "name": "Edited synthetic printer"}
-            edited.pop("entity_prefix")
+            edited = {**form(), "name": "Edited synthetic printer",
+                      "print_status": "sensor.arbitrary_activity", "current_stage": "sensor.arbitrary_phase"}
+            hass.states.async_set(edited['print_status'], 'idle')
+            hass.states.async_set(edited['current_stage'], 'idle')
             edited.pop("screen_ai_task")
+            edited.pop("current_layer")
             conflict = await hass.config_entries.options.async_configure(
                 options["flow_id"], {**edited, "camera": form(2)["camera"]}
             )
@@ -204,9 +223,23 @@ async def run(root, start, configuration):
             assert not old_runtime.observers and old_runtime.unsub is None
             assert first.options["printers"][0]["name"] == edited["name"]
             assert "screen_ai_task" not in first.options
-            assert first.unique_id == form()["entity_prefix"]
+            assert "current_layer" not in first.options['printers'][0]
+            assert first.runtime_data.printers[0].print_status == 'sensor.arbitrary_activity'
+            assert first.runtime_data.printers[0].current_layer is None
+            assert first.unique_id == "ui_printer_1"
             assert sensor_id(hass, first.unique_id) == original_sensor
             assert second.runtime_data.stopping is False
+            # The original identity stays reserved even after every binding that
+            # could reveal it has been moved away from the original prefix.
+            reclaimed_identity = form(3)
+            reclaimed_identity['print_status'] = form()['print_status']
+            await expect_error(hass, reclaimed_identity, "printer_conflict")
+            # Disabled entries also retain their configured entity reservations.
+            assert await hass.config_entries.async_set_disabled_by(second.entry_id, ConfigEntryDisabler.USER)
+            await expect_error(hass, {**form(3), 'online': form(2)['online']}, "printer_conflict")
+            assert await hass.config_entries.async_set_disabled_by(second.entry_id, None)
+            await hass.async_block_till_done()
+            assert second.state is ConfigEntryState.LOADED
             checked.append("edit_cancel_validation_reload_and_stable_sensor")
 
             # Unload while a synthetic capture is in flight must drain its task.
@@ -218,8 +251,8 @@ async def run(root, start, configuration):
                 await asyncio.Event().wait()
             monitor = next(iter(runtime.jobs.values()))
             monitor.capture = blocked_capture
-            hass.states.async_set(f"sensor.{first.unique_id}_print_status", "running")
-            hass.states.async_set(f"sensor.{first.unique_id}_current_stage", "printing")
+            hass.states.async_set(first.options["printers"][0]["print_status"], "running")
+            hass.states.async_set(first.options["printers"][0]["current_stage"], "printing")
             runtime.started -= 121
             runtime.tick(None)
             await asyncio.wait_for(entered.wait(), 3)
@@ -278,7 +311,7 @@ async def run(root, start, configuration):
             assert hass.data[DOMAIN].staging is first.runtime_data.staging
             assert hass.data[DOMAIN].latch is first.runtime_data.latch
             install_entities(hass, form(3))
-            await expect_error(hass, {**form(3), "entity_prefix": "printer_1"}, "printer_conflict")
+            await expect_error(hass, {**form(3), "print_status": "sensor.printer_1_print_status"}, "printer_conflict")
             await expect_error(hass, {**form(3), "camera": "camera.printer_1"}, "printer_conflict")
             assert await hass.config_entries.async_reload(first.entry_id)
             assert not hass.data[DOMAIN].stopping
@@ -320,7 +353,6 @@ async def run(root, start, configuration):
                 hass.states.async_set(replacement_camera, "idle")
                 options = await hass.config_entries.options.async_init(entry.entry_id)
                 edited = {**form(), "camera": replacement_camera}
-                edited.pop("entity_prefix")
                 unload = AsyncMock(return_value=False)
                 if failure == "exception":
                     unload.side_effect = RuntimeError("synthetic platform unload failure")
@@ -385,7 +417,10 @@ async def run(root, start, configuration):
             await hass.async_stop(force=True)
         hass, media = await start(switching, None)
         try:
-            values = {**yaml["printers"][0], "ai_task": "ai_task.synthetic_comparison",
+            printer = integration.parse_config(yaml).printers[0]
+            values = {"name": printer.name, **{key: getattr(printer, key)
+                      for key in integration.REQUIRED_ENTITIES | integration.OPTIONAL_ENTITIES},
+                      "ai_task": "ai_task.synthetic_comparison",
                       "notify_service": "notify.synthetic_phone"}
             install_entities(hass, values)
             install_services(hass, calls)
@@ -412,6 +447,123 @@ async def run(root, start, configuration):
             assert row.unique_id == unique_id and row.config_entry_id is None
             assert calls == [] and camera.await_count == 0
             checked.append("yaml_ui_yaml_switch_preserves_logical_identity")
+        finally:
+            await hass.async_stop(force=True)
+        # Seed version-1 UI payloads through Core's config-entry API. Migration
+        # must work before printer states exist, and preserve data/options identity.
+        for with_options in (False, True):
+            migration_root = root / f'migration-{with_options}'
+            migration_root.mkdir()
+            hass, media = await start(migration_root, None)
+            legacy = configuration(1)
+            old_options = copy.deepcopy(legacy) if with_options else {}
+            if with_options:
+                old_options['printers'][0]['name'] = 'Previously edited printer'
+                old_options['printers'][0]['camera'] = 'camera.legacy_option_view'
+                old_options['screen_ai_task'] = 'ai_task.legacy_screen'
+            entry = ConfigEntry(domain=DOMAIN, title='Legacy UI printer', data=legacy,
+                options=old_options, version=1, minor_version=1, unique_id='printer_1',
+                source='user', discovery_keys={}, subentries_data=[])
+            try:
+                install_services(hass, calls)
+                await hass.config_entries.async_add(entry)
+                await hass.async_block_till_done()
+                assert entry.state is ConfigEntryState.LOADED, entry.state
+                assert entry.version == 2 and entry.unique_id == 'printer_1'
+                assert 'entity_prefix' not in entry.data['printers'][0]
+                assert entry.data['printers'][0]['print_status'] == 'sensor.printer_1_print_status'
+                assert set(entry.runtime_data.jobs) == {'printer_1'}
+                original = sensor_id(hass, 'printer_1')
+                assert original and hass.states.get(original)
+                if with_options:
+                    assert 'entity_prefix' not in entry.options['printers'][0]
+                    assert entry.options['printers'][0]['camera'] == 'camera.legacy_option_view'
+                    assert entry.options['screen_ai_task'] == 'ai_task.legacy_screen'
+                    assert entry.runtime_data.printers[0].name == 'Previously edited printer'
+                else:
+                    assert dict(entry.options) == {}
+                # The old setup required no optional telemetry. Absent inferred
+                # telemetry must not block an unrelated post-upgrade edit.
+                selected = dict(entry.options or entry.data)
+                edit_values = {key: selected[key] for key in ('ai_task', 'screen_ai_task', 'notify_service') if key in selected}
+                edit_values.update(selected['printers'][0])
+                install_entities(hass, edit_values)
+                for field in integration.OPTIONAL_ENTITIES:
+                    hass.states.async_remove(edit_values[field])
+                options = await hass.config_entries.options.async_init(entry.entry_id)
+                edit_values['name'] = 'Edited after migration'
+                edit_values['notify_service'] = 'notify.synthetic_phone'
+                bad_selection = await hass.config_entries.options.async_configure(options['flow_id'],
+                    {**edit_values, 'current_layer': 'sensor.new_missing_layer'})
+                assert bad_selection['type'] == 'form' and bad_selection['errors'] == {'current_layer': 'missing_entity'}
+                result = await hass.config_entries.options.async_configure(options['flow_id'], edit_values)
+                assert result['type'] == 'create_entry', result
+                await hass.async_block_till_done()
+                assert entry.state is ConfigEntryState.LOADED
+                assert entry.options['printers'][0]['name'] == 'Edited after migration'
+                assert sensor_id(hass, 'printer_1') == original
+                migrated_data = copy.deepcopy(dict(entry.data))
+                migrated_options = copy.deepcopy(dict(entry.options))
+                migrated_id = entry.entry_id
+            finally:
+                await hass.async_stop(force=True)
+            hass, media = await start(migration_root, None)
+            try:
+                restored = hass.config_entries.async_get_entry(migrated_id)
+                assert restored.state is ConfigEntryState.LOADED
+                assert restored.version == 2 and restored.unique_id == 'printer_1'
+                assert dict(restored.data) == migrated_data and dict(restored.options) == migrated_options
+                assert sensor_id(hass, 'printer_1') == original
+                assert set(restored.runtime_data.jobs) == {'printer_1'}
+                assert calls == [] and camera.await_count == 0
+                checked.append(f'legacy_ui_migration_options_{with_options}_and_restart')
+            finally:
+                await hass.async_stop(force=True)
+
+        # Both payloads validate before a v1 entry is changed. A bad stored
+        # options payload must leave its valid data and version untouched.
+        rejected_root = root / 'migration-rejected'
+        rejected_root.mkdir()
+        hass, media = await start(rejected_root, None)
+        try:
+            legacy = configuration(1)
+            entry = ConfigEntry(domain=DOMAIN, title='Invalid legacy options', data=legacy,
+                options={'printers': []}, version=1, minor_version=1, unique_id='printer_1',
+                source='user', discovery_keys={}, subentries_data=[])
+            await hass.config_entries.async_add(entry)
+            assert entry.state is ConfigEntryState.MIGRATION_ERROR
+            assert entry.version == 1 and dict(entry.data) == legacy
+            assert dict(entry.options) == {'printers': []}
+            assert not hass.data.get('printer_guard_resources', {}).get('entries')
+            checked.append('invalid_migration_is_atomic_and_does_not_start')
+        finally:
+            await hass.async_stop(force=True)
+
+        # Explicit YAML with arbitrary names uses exactly the selected states;
+        # absent telemetry must never trigger inferred entity lookups.
+        explicit_root = root / 'explicit-yaml'
+        explicit_root.mkdir()
+        explicit = {key: form()[key] for key in ('ai_task', 'notify_service')}
+        entities = {key: value for key, value in form().items()
+            if key not in ('ai_task', 'screen_ai_task', 'notify_service')
+            and key not in integration.OPTIONAL_ENTITIES}
+        entities.update(print_status='sensor.custom_activity', current_stage='sensor.custom_phase',
+                        task_name='sensor.custom_job', start_time='sensor.custom_started')
+        explicit['printers'] = [entities]
+        hass, media = await start(explicit_root, explicit)
+        try:
+            runtime = hass.data[DOMAIN]
+            printer = runtime.printers[0]
+            install_entities(hass, {**entities, 'ai_task': explicit['ai_task']})
+            hass.states.async_set(entities['print_status'], 'running')
+            hass.states.async_set(entities['current_stage'], 'printing')
+            context = integration.context_from_states(hass.states, printer)
+            assert context.eligible and context.task == 'synthetic job'
+            assert all(value is None for value in context.telemetry.values())
+            assert printer.key == 'sensor.custom_activity'
+            assert sensor_id(hass, printer.key)
+            assert calls == [] and camera.await_count == 0
+            checked.append('explicit_yaml_arbitrary_entities_and_omitted_telemetry')
         finally:
             await hass.async_stop(force=True)
     return {

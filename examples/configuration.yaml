@@ -8,11 +8,27 @@ printer_guard:
   notify_service: notify.example_phone
   printers:
     - name: Printer One
-      entity_prefix: printer_one
       camera: camera.printer_one
+      print_status: sensor.printer_one_print_status
+      current_stage: sensor.printer_one_current_stage
+      online: binary_sensor.printer_one_online
+      print_error: binary_sensor.printer_one_print_error
+      task_name: sensor.printer_one_task_name
+      start_time: sensor.printer_one_start_time
+      # Optional telemetry; omit any fields you do not have.
+      current_layer: sensor.printer_one_current_layer
+      total_layer_count: sensor.printer_one_total_layer_count
+      print_progress: sensor.printer_one_print_progress
+      nozzle_temperature: sensor.printer_one_nozzle_temperature
+      bed_temperature: sensor.printer_one_bed_temperature
     - name: Printer Two
-      entity_prefix: printer_two
       camera: camera.printer_two
+      print_status: sensor.printer_two_print_status
+      current_stage: sensor.printer_two_current_stage
+      online: binary_sensor.printer_two_online
+      print_error: binary_sensor.printer_two_print_error
+      task_name: sensor.printer_two_task_name
+      start_time: sensor.printer_two_start_time
 
 # The HA process also needs an existing, writable absolute media directory under
 # homeassistant.media_dirs.local. For example, merge this mapping if appropriate:

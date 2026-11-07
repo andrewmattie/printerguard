@@ -150,6 +150,13 @@ async def start(root, settings, missing_media=False):
     return hass, media
 
 
+def printer_entity(printer, domain, suffix):
+    """Support both explicit candidate bindings and prior prefix-based sources."""
+    if hasattr(printer, suffix):
+        return getattr(printer, suffix)
+    return printer.entity(domain, suffix)
+
+
 def eligible(hass, runtime):
     for printer in runtime.printers:
         for domain, suffix, value in (
@@ -160,7 +167,7 @@ def eligible(hass, runtime):
             ("sensor", "task_name", "synthetic job"),
             ("sensor", "start_time", "synthetic start"),
         ):
-            hass.states.async_set(getattr(printer,suffix), value)
+            hass.states.async_set(printer_entity(printer,domain,suffix), value)
         hass.states.async_set(printer.camera, "idle")
 
 
@@ -519,7 +526,7 @@ async def alerts():
                     }
                 )
             hass.states.async_set(
-                printer.task_name, "replacement synthetic job"
+                printer_entity(printer,"sensor","task_name"), "replacement synthetic job"
             )
             await runtime.run(name, monitor)
             diagnostic = runtime.diagnostics[name]
@@ -655,7 +662,7 @@ async def service_contract():
             adapter = monitor.screen.__self__
             printer = runtime.printers[0]
             sensor_id = er.async_get(hass).async_get_entity_id(
-                "sensor", "printer_guard", f"printer_guard_{printer.key}_diagnostic"
+                "sensor", "printer_guard", f"printer_guard_{getattr(printer, 'key', None) or printer.prefix}_diagnostic"
             )
             assert sensor_id is not None
             for mode, reasons in (
@@ -664,7 +671,7 @@ async def service_contract():
                 ("both", ["model_reported", "missing_evidence"]),
             ):
                 response_mode[0] = mode
-                hass.states.async_set(printer.task_name, mode)
+                hass.states.async_set(printer_entity(printer,"sensor","task_name"), mode)
                 await runtime.run(name, monitor)
                 diagnostic = runtime.diagnostics[name]
                 assert diagnostic["outcome"] == "degraded"
@@ -707,7 +714,7 @@ async def service_contract():
                 adapter.entity_id = entity
                 features[0] = support
                 response_mode[0] = mode
-                hass.states.async_set(printer.task_name, case)
+                hass.states.async_set(printer_entity(printer,"sensor","task_name"), case)
                 await runtime.run(name, monitor)
                 diagnostic = runtime.diagnostics[name]
                 assert diagnostic["outcome"] == "failure", diagnostic
@@ -727,7 +734,7 @@ async def service_contract():
             assert protected_response not in "\n".join(problems)
             response_mode[0] = "valid"
             hass.states.async_set(
-                printer.task_name, "recovered synthetic job"
+                printer_entity(printer,"sensor","task_name"), "recovered synthetic job"
             )
             await runtime.run(name, monitor)
             assert runtime.diagnostics[name]["outcome"] == "clear", runtime.diagnostics[

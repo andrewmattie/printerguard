@@ -7,8 +7,15 @@ def example_config():
         'ai_task': 'ai_task.example_vision',
         'notify_service': 'notify.example_phone',
         'printers': [
-            {'name': 'Printer One', 'entity_prefix': 'printer_one', 'camera': 'camera.printer_one'},
-            {'name': 'Printer Two', 'entity_prefix': 'printer_two', 'camera': 'camera.printer_two'},
+            {'name': f'Printer {name}', 'camera': f'camera.printer_{number}',
+             **{key: f'{domain}.printer_{number}_{key}' for key, domain in (
+                 ('print_status', 'sensor'), ('current_stage', 'sensor'),
+                 ('online', 'binary_sensor'), ('print_error', 'binary_sensor'),
+                 ('task_name', 'sensor'), ('start_time', 'sensor'),
+                 ('current_layer', 'sensor'), ('total_layer_count', 'sensor'),
+                 ('print_progress', 'sensor'), ('nozzle_temperature', 'sensor'),
+                 ('bed_temperature', 'sensor'))}}
+            for name, number in (('One', 'one'), ('Two', 'two'))
         ],
     }
 

@@ -111,7 +111,7 @@ def parse_config(value, *, printer_id=None) -> Settings:
             # Preserve the old diagnostic/latch identity when replacing a legacy
             # prefix with exactly its original explicit print-status binding.
             identity = (status.removeprefix('sensor.').removesuffix('_print_status')
-                if status.endswith('_print_status') else status)
+                if status.endswith('_print_status') and status != 'sensor._print_status' else status)
         identity = printer_id if printer_id is not None else identity
         selected = set(entities.values())
         if len(selected) != len(entities):

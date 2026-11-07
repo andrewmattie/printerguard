@@ -4,34 +4,53 @@
     "step": {
       "user": {
         "title": "Add a UI-managed printer",
-        "description": "YAML remains supported. Add each printer once, using either YAML or UI, with at most two printers total. Configuration validation does not capture images, call AI providers or send alerts.",
+        "description": "Select each printer entity directly. Add each printer once, using either YAML or UI, with at most two printers total. Validation does not capture images, call AI providers or send alerts.",
         "data": {
           "name": "Printer name",
-          "entity_prefix": "Printer entity prefix",
           "camera": "Camera",
           "ai_task": "Comparison AI Task",
           "screen_ai_task": "Screening AI Task (optional)",
-          "notify_service": "Notification action"
+          "notify_service": "Notification action",
+          "print_status": "Print status",
+          "current_stage": "Current stage",
+          "online": "Online",
+          "print_error": "Print error",
+          "task_name": "Task name",
+          "start_time": "Start time",
+          "current_layer": "Current layer (optional)",
+          "total_layer_count": "Total layers (optional)",
+          "print_progress": "Print progress (optional)",
+          "nozzle_temperature": "Nozzle temperature (optional)",
+          "bed_temperature": "Bed temperature (optional)"
         },
         "data_description": {
           "name": "A short name for the diagnostic sensor and alert title.",
-          "entity_prefix": "The shared prefix of your six printer entities, for example printer_one. This printer identity cannot be changed later.",
           "camera": "An available JPEG camera showing this printer.",
           "ai_task": "Image-capable AI Task with structured data for the comparison. Its provider receives frames and telemetry and may charge.",
           "screen_ai_task": "Optional separate AI Task for the first frame. Leave empty to use the comparison task. A configured task never silently falls back.",
-          "notify_service": "An existing notify action accepting title and message, for example notify.example_phone. No test alert is sent."
+          "notify_service": "An existing notify action accepting title and message, for example notify.example_phone. No test alert is sent.",
+          "print_status": "Sensor reporting running while a print is active.",
+          "current_stage": "Sensor reporting printing during the printable stage.",
+          "online": "Binary sensor reporting on when the printer is connected.",
+          "print_error": "Binary sensor reporting off when no printer error is present.",
+          "task_name": "Sensor identifying the current print job.",
+          "start_time": "Sensor identifying when the current print job started.",
+          "current_layer": "Optional current-layer telemetry sent with the assessment.",
+          "total_layer_count": "Optional total-layer telemetry sent with the assessment.",
+          "print_progress": "Optional print-progress telemetry sent with the assessment.",
+          "nozzle_temperature": "Optional nozzle-temperature telemetry sent with the assessment.",
+          "bed_temperature": "Optional bed-temperature telemetry sent with the assessment."
         }
       }
     },
     "error": {
-      "invalid_config": "Enter a printable name, lowercase entity prefix, camera entity, AI Task and notify action. Check the entity domains.",
-      "printer_conflict": "This prefix or camera is already owned by YAML or another Printer Guard entry. Remove it from that source first.",
+      "invalid_config": "Enter a printable name, each required printer entity, AI Task and notify action. Check entity domains and select a distinct entity for each printer role.",
+      "printer_conflict": "This printer identity or one of its entities is already owned by YAML or another Printer Guard entry. Remove it from that source first.",
       "missing_media": "Configure homeassistant.media_dirs.local as an existing, writable absolute local directory, then restart Home Assistant.",
       "missing_entity": "This entity does not exist. Configure the entity first or select another.",
       "unavailable_entity": "This entity is unavailable. Restore it or select another before saving.",
       "unsupported_ai_task": "Select an AI Task supporting structured data generation and image attachments.",
       "missing_notify_service": "This notify action is not registered. Configure it first or select another.",
-      "missing_printer_entities": "The prefix must match existing print_status, current_stage, online, print_error, task_name and start_time entities. See the setup documentation.",
       "printer_limit": "Printer Guard supports at most two printers total across YAML and UI. Remove another configuration first."
     },
     "abort": {
@@ -42,38 +61,59 @@
     "step": {
       "init": {
         "title": "Configure UI-managed printer",
-        "description": "Edits apply by reloading this printer, canceling any in-flight assessment. The entity prefix stays fixed. These changes do not rewrite YAML.",
+        "description": "Edits apply by reloading this printer, canceling any in-flight assessment. Select each printer entity directly; its diagnostic identity stays fixed. These changes do not rewrite YAML.",
         "data": {
           "name": "Printer name",
           "camera": "Camera",
           "ai_task": "Comparison AI Task",
           "screen_ai_task": "Screening AI Task (optional)",
-          "notify_service": "Notification action"
+          "notify_service": "Notification action",
+          "print_status": "Print status",
+          "current_stage": "Current stage",
+          "online": "Online",
+          "print_error": "Print error",
+          "task_name": "Task name",
+          "start_time": "Start time",
+          "current_layer": "Current layer (optional)",
+          "total_layer_count": "Total layers (optional)",
+          "print_progress": "Print progress (optional)",
+          "nozzle_temperature": "Nozzle temperature (optional)",
+          "bed_temperature": "Bed temperature (optional)"
         },
         "data_description": {
           "name": "A short name for the diagnostic sensor and alert title.",
           "camera": "An available JPEG camera showing this printer.",
           "ai_task": "Image-capable AI Task with structured data for the comparison. Its provider receives frames and telemetry and may charge.",
           "screen_ai_task": "Optional separate AI Task for the first frame. Leave empty to use the comparison task. A configured task never silently falls back.",
-          "notify_service": "An existing notify action accepting title and message, for example notify.example_phone. No test alert is sent."
+          "notify_service": "An existing notify action accepting title and message, for example notify.example_phone. No test alert is sent.",
+          "print_status": "Sensor reporting running while a print is active.",
+          "current_stage": "Sensor reporting printing during the printable stage.",
+          "online": "Binary sensor reporting on when the printer is connected.",
+          "print_error": "Binary sensor reporting off when no printer error is present.",
+          "task_name": "Sensor identifying the current print job.",
+          "start_time": "Sensor identifying when the current print job started.",
+          "current_layer": "Optional current-layer telemetry sent with the assessment.",
+          "total_layer_count": "Optional total-layer telemetry sent with the assessment.",
+          "print_progress": "Optional print-progress telemetry sent with the assessment.",
+          "nozzle_temperature": "Optional nozzle-temperature telemetry sent with the assessment.",
+          "bed_temperature": "Optional bed-temperature telemetry sent with the assessment."
         }
       }
     },
     "error": {
-      "invalid_config": "Enter a printable name, lowercase entity prefix, camera entity, AI Task and notify action. Check the entity domains.",
-      "printer_conflict": "This prefix or camera is already owned by YAML or another Printer Guard entry. Remove it from that source first.",
+      "invalid_config": "Enter a printable name, each required printer entity, AI Task and notify action. Check entity domains and select a distinct entity for each printer role.",
+      "printer_conflict": "This printer identity or one of its entities is already owned by YAML or another Printer Guard entry. Remove it from that source first.",
       "missing_media": "Configure homeassistant.media_dirs.local as an existing, writable absolute local directory, then restart Home Assistant.",
       "missing_entity": "This entity does not exist. Configure the entity first or select another.",
       "unavailable_entity": "This entity is unavailable. Restore it or select another before saving.",
       "unsupported_ai_task": "Select an AI Task supporting structured data generation and image attachments.",
       "missing_notify_service": "This notify action is not registered. Configure it first or select another.",
-      "missing_printer_entities": "The prefix must match existing print_status, current_stage, online, print_error, task_name and start_time entities. See the setup documentation.",
       "printer_limit": "Printer Guard supports at most two printers total across YAML and UI. Remove another configuration first."
     }
   },
   "exceptions": {
     "printer_conflict": {
-      "message": "Invalid or conflicting Printer Guard configuration. YAML owns matching prefixes and cameras; remove the duplicate configuration before reloading."
+      "message": "Invalid or conflicting Printer Guard configuration. YAML owns matching printer identities and entities; remove the duplicate configuration before reloading."
     },
     "startup_failed": {
       "message": "Printer Guard could not initialize local media or its durable state. Check the local media directory and reload."
