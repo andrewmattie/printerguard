@@ -1,0 +1,85 @@
+{
+  "title": "Printer Guard",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a UI-managed printer",
+        "description": "YAML remains supported. Add each printer once, using either YAML or UI, with at most two printers total. Configuration validation does not capture images, call AI providers or send alerts.",
+        "data": {
+          "name": "Printer name",
+          "entity_prefix": "Printer entity prefix",
+          "camera": "Camera",
+          "ai_task": "Comparison AI Task",
+          "screen_ai_task": "Screening AI Task (optional)",
+          "notify_service": "Notification action"
+        },
+        "data_description": {
+          "name": "A short name for the diagnostic sensor and alert title.",
+          "entity_prefix": "The shared prefix of your six printer entities, for example printer_one. This printer identity cannot be changed later.",
+          "camera": "An available JPEG camera showing this printer.",
+          "ai_task": "Image-capable AI Task with structured data for the comparison. Its provider receives frames and telemetry and may charge.",
+          "screen_ai_task": "Optional separate AI Task for the first frame. Leave empty to use the comparison task. A configured task never silently falls back.",
+          "notify_service": "An existing notify action accepting title and message, for example notify.example_phone. No test alert is sent."
+        }
+      }
+    },
+    "error": {
+      "invalid_config": "Enter a printable name, lowercase entity prefix, camera entity, AI Task and notify action. Check the entity domains.",
+      "printer_conflict": "This prefix or camera is already owned by YAML or another Printer Guard entry. Remove it from that source first.",
+      "missing_media": "Configure homeassistant.media_dirs.local as an existing, writable absolute local directory, then restart Home Assistant.",
+      "missing_entity": "This entity does not exist. Configure the entity first or select another.",
+      "unavailable_entity": "This entity is unavailable. Restore it or select another before saving.",
+      "unsupported_ai_task": "Select an AI Task supporting structured data generation and image attachments.",
+      "missing_notify_service": "This notify action is not registered. Configure it first or select another.",
+      "missing_printer_entities": "The prefix must match existing print_status, current_stage, online, print_error, task_name and start_time entities. See the setup documentation.",
+      "printer_limit": "Printer Guard supports at most two printers total across YAML and UI. Remove another configuration first."
+    },
+    "abort": {
+      "already_configured": "This printer is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure UI-managed printer",
+        "description": "Edits apply by reloading this printer, canceling any in-flight assessment. The entity prefix stays fixed. These changes do not rewrite YAML.",
+        "data": {
+          "name": "Printer name",
+          "camera": "Camera",
+          "ai_task": "Comparison AI Task",
+          "screen_ai_task": "Screening AI Task (optional)",
+          "notify_service": "Notification action"
+        },
+        "data_description": {
+          "name": "A short name for the diagnostic sensor and alert title.",
+          "camera": "An available JPEG camera showing this printer.",
+          "ai_task": "Image-capable AI Task with structured data for the comparison. Its provider receives frames and telemetry and may charge.",
+          "screen_ai_task": "Optional separate AI Task for the first frame. Leave empty to use the comparison task. A configured task never silently falls back.",
+          "notify_service": "An existing notify action accepting title and message, for example notify.example_phone. No test alert is sent."
+        }
+      }
+    },
+    "error": {
+      "invalid_config": "Enter a printable name, lowercase entity prefix, camera entity, AI Task and notify action. Check the entity domains.",
+      "printer_conflict": "This prefix or camera is already owned by YAML or another Printer Guard entry. Remove it from that source first.",
+      "missing_media": "Configure homeassistant.media_dirs.local as an existing, writable absolute local directory, then restart Home Assistant.",
+      "missing_entity": "This entity does not exist. Configure the entity first or select another.",
+      "unavailable_entity": "This entity is unavailable. Restore it or select another before saving.",
+      "unsupported_ai_task": "Select an AI Task supporting structured data generation and image attachments.",
+      "missing_notify_service": "This notify action is not registered. Configure it first or select another.",
+      "missing_printer_entities": "The prefix must match existing print_status, current_stage, online, print_error, task_name and start_time entities. See the setup documentation.",
+      "printer_limit": "Printer Guard supports at most two printers total across YAML and UI. Remove another configuration first."
+    }
+  },
+  "exceptions": {
+    "printer_conflict": {
+      "message": "Invalid or conflicting Printer Guard configuration. YAML owns matching prefixes and cameras; remove the duplicate configuration before reloading."
+    },
+    "startup_failed": {
+      "message": "Printer Guard could not initialize local media or its durable state. Check the local media directory and reload."
+    },
+    "printer_limit": {
+      "message": "Printer Guard supports at most two printers total across YAML and UI. Remove another configuration before reloading."
+    }
+  }
+}

@@ -7,7 +7,8 @@ Keep changes focused and preserve disabled physical controls. See the
 
 The integration lives in `custom_components/printer_guard/`:
 
-- `config.py`: configuration validation.
+- `config.py`: shared configuration validation.
+- `config_flow.py`: read-only UI setup/options validation and source ownership.
 - `ha_runtime.py`: printer states and camera access.
 - `engine.py` and `frame_validation.py`: assessment orchestration and frame checks.
 - `ai_task_adapter.py` and `media.py`: AI requests, temporary attachments and cleanup.
@@ -54,7 +55,10 @@ python -m pip install -r requirements-ha-test.txt
 python scripts/check_ha.py --report /tmp/core-results.json
 ```
 
-This uses Core 2026.11.0 with temporary configuration and synthetic services.
+This uses Core 2026.11.0 with temporary configuration and synthetic services,
+including actual UI flows, options, ownership conflicts, config-entry
+unload/reload/removal and storage-backed restart. It never contacts an installed
+Home Assistant instance.
 Add `--previous /path/to/previous/custom_components` for cold-process install,
 update and rollback checks; otherwise those checks are skipped. Dependency
 overlays are rejected, and worker shutdown failures fail the check.
