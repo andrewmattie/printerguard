@@ -8,11 +8,6 @@ Checks start after a two-minute delay and run every minute. After a successful
 notify action, repeats for that printer and job are suppressed for 30 minutes.
 New jobs don't inherit the cooldown; Home Assistant restarts clear it.
 
-Developed against Home Assistant Core 2026.10.4. Validate live camera assessments
-and notification delivery in your setup.
-Supervise prints and keep checking the printer: false alarms and missed failures
-are possible. Different image bytes do not prove a live view.
-
 ## Setup
 
 Configure a JPEG camera per printer, an image-capable `ai_task` returning

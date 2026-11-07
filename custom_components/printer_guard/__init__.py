@@ -65,7 +65,7 @@ class Runtime:
         self.stopping=False
         self.unsub=None
         self.unsub_stop=None
-        self.diagnostics={p.prefix: {'outcome':'not_checked', 'last_check':None,
+        self.diagnostics={p.key: {'outcome':'not_checked', 'last_check':None,
             'last_usable_assessment':None,'check_started':None,'assessment':'not_checked',
             'notification':'not_requested','freshness':'not_checked'} for p in self.printers}
         self.diagnostic_last_publish={}
@@ -74,26 +74,26 @@ class Runtime:
             ai=AITaskAdapter(hass,settings.ai_task,self.staging,screen_entity_id=settings.screen_ai_task)
             async def capture(p=printer): return await camera_capture(hass,p)
             def context(p=printer): return context_from_states(hass.states,p)
-            async def reserve(task,start,p=printer): return await latch.reserve(p.prefix,task,start)
+            async def reserve(task,start,p=printer): return await latch.reserve(p.key,task,start)
             async def pause(): raise RuntimeError('automatic pause is disabled')
             async def notify(message,expected,p=printer):
                 current=context_from_states(hass.states,p)
                 if not current.eligible or current.session != expected.session:
                     return 'suppressed_session'
                 now=time.monotonic()
-                previous=self.last_notice.get(p.prefix)
+                previous=self.last_notice.get(p.key)
                 if previous is not None and previous[0] == expected.job and now-previous[1] < 1800:
                     return 'suppressed_cooldown'
                 await hass.services.async_call('notify',settings.notify_service.split('.',1)[1],
                     {'title':f'{p.name} print check', 'message':message},blocking=True)
                 # Keep one bounded entry per printer. A different validated job
                 # must receive its first alert even within the previous cooldown.
-                self.last_notice[p.prefix]=(expected.job,now)
+                self.last_notice[p.key]=(expected.job,now)
                 return 'submitted'
-            self.jobs[printer.prefix]=Monitor(capture=capture,screen=ai.screen,compare=ai.compare,
+            self.jobs[printer.key]=Monitor(capture=capture,screen=ai.screen,compare=ai.compare,
                 context=context,reserve=reserve,pause=pause,notify=notify,clock=time.monotonic,allow_pause=False,
                 ai_phase=lambda adapter=ai: adapter.diagnostic_phase,
-                on_started=lambda new_job,p=printer: self.check_started(p.prefix,new_job))
+                on_started=lambda new_job,p=printer: self.check_started(p.key,new_job))
 
     @classmethod
     async def async_create(cls, hass, settings):

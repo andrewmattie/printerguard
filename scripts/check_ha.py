@@ -18,6 +18,7 @@ import socket
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 
 from PIL import Image
 import orjson
@@ -31,9 +32,7 @@ SOURCE = ROOT / "custom_components/printer_guard"
 problems = []
 
 
-def source_domain(source=None):
-    if source is None:
-        source = SOURCE
+def source_domain(source):
     return json.loads((source / "manifest.json").read_text())["domain"]
 
 
@@ -161,7 +160,7 @@ def eligible(hass, runtime):
             ("sensor", "task_name", "synthetic job"),
             ("sensor", "start_time", "synthetic start"),
         ):
-            hass.states.async_set(printer.entity(domain, suffix), value)
+            hass.states.async_set(getattr(printer,suffix), value)
         hass.states.async_set(printer.camera, "idle")
 
 
@@ -175,7 +174,6 @@ async def run_case(root, count, boundary, expect_existing_registry=False, uninst
     provider_release = asyncio.Event()
     worker_entered = threading.Event()
     worker_release = threading.Event()
-    original = None
     try:
         assert not any(
             problem.startswith("homeassistant.setup:")
@@ -521,7 +519,7 @@ async def alerts():
                     }
                 )
             hass.states.async_set(
-                printer.entity("sensor", "task_name"), "replacement synthetic job"
+                printer.task_name, "replacement synthetic job"
             )
             await runtime.run(name, monitor)
             diagnostic = runtime.diagnostics[name]
@@ -657,7 +655,7 @@ async def service_contract():
             adapter = monitor.screen.__self__
             printer = runtime.printers[0]
             sensor_id = er.async_get(hass).async_get_entity_id(
-                "sensor", "printer_guard", f"printer_guard_{printer.prefix}_diagnostic"
+                "sensor", "printer_guard", f"printer_guard_{printer.key}_diagnostic"
             )
             assert sensor_id is not None
             for mode, reasons in (
@@ -666,7 +664,7 @@ async def service_contract():
                 ("both", ["model_reported", "missing_evidence"]),
             ):
                 response_mode[0] = mode
-                hass.states.async_set(printer.entity("sensor", "task_name"), mode)
+                hass.states.async_set(printer.task_name, mode)
                 await runtime.run(name, monitor)
                 diagnostic = runtime.diagnostics[name]
                 assert diagnostic["outcome"] == "degraded"
@@ -709,7 +707,7 @@ async def service_contract():
                 adapter.entity_id = entity
                 features[0] = support
                 response_mode[0] = mode
-                hass.states.async_set(printer.entity("sensor", "task_name"), case)
+                hass.states.async_set(printer.task_name, case)
                 await runtime.run(name, monitor)
                 diagnostic = runtime.diagnostics[name]
                 assert diagnostic["outcome"] == "failure", diagnostic
@@ -729,7 +727,7 @@ async def service_contract():
             assert protected_response not in "\n".join(problems)
             response_mode[0] = "valid"
             hass.states.async_set(
-                printer.entity("sensor", "task_name"), "recovered synthetic job"
+                printer.task_name, "recovered synthetic job"
             )
             await runtime.run(name, monitor)
             assert runtime.diagnostics[name]["outcome"] == "clear", runtime.diagnostics[
@@ -806,7 +804,7 @@ async def split_task_contract():
             await hass.async_block_till_done()
             runtime = hass.data["printer_guard"]
             adapter = next(iter(runtime.jobs.values())).screen.__self__
-            frame = type("Frame", (), {"content": jpeg()})()
+            frame = SimpleNamespace(content=jpeg())
             adapter.screen_entity_id = "ai_task.synthetic_missing"
             try:
                 await adapter.screen(frame, {})

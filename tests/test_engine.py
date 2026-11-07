@@ -10,7 +10,7 @@ from guard_fixtures import synthetic_jpeg
 class Fake:
     def __init__(self):
         self.t = 0.0; self.n = 0; self.called = []; self.status = 'running'; self.stage='printing'; self.job='job'; self.epoch='epoch'; self.trusted=False
-        self.result={'judgeable':True, 'score':0.9, 'evidence':'loose filament'}; self.same=False; self.notify_error=False
+        self.result={'judgeable':True, 'score':0.9, 'evidence':'loose filament'}; self.same=False
     def ctx(self): return e.Context(self.status,self.stage,True,True,'off',self.job,'start',self.epoch,{'layer':None})
     def clock(self): return self.t
     async def sleep(self,n): self.t += n

@@ -17,7 +17,7 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual(p.camera,'camera.printer_one')
         self.assertEqual(a.camera,'camera.printer_two')
         self.assertNotEqual(p.camera,a.camera)
-        self.assertNotEqual(p.entity('sensor','print_status'),a.entity('sensor','print_status'))
+        self.assertNotEqual(p.print_status,a.print_status)
     def test_context_reads_only_selected_printer(self):
         p,a=SETTINGS.printers
         now=datetime.now(timezone.utc)
@@ -25,11 +25,11 @@ class IsolationTests(unittest.TestCase):
         states={}
         for printer,job in ((p,'example job one'),(a,'example job two')):
             for domain,suffix,value in [('sensor','print_status','running'),('sensor','current_stage','printing'),('binary_sensor','online','on'),('binary_sensor','print_error','off'),('sensor','task_name',job),('sensor','start_time','time')]:
-                states[printer.entity(domain,suffix)]=state(value)
+                states[getattr(printer,suffix)]=state(value)
             states[printer.camera]=state('idle')
         self.assertEqual(runtime.context_from_states(states,p).task,'example job one')
         self.assertEqual(runtime.context_from_states(states,a).task,'example job two')
-        states[a.entity('binary_sensor','online')]=state('off')
+        states[a.online]=state('off')
         self.assertTrue(runtime.context_from_states(states,p).eligible)
         self.assertFalse(runtime.context_from_states(states,a).eligible)
 
