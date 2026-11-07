@@ -3,8 +3,8 @@
   "config": {
     "step": {
       "user": {
-        "title": "Add a UI-managed printer",
-        "description": "Select each printer entity directly. Add each printer once, using either YAML or UI, with at most two printers total. Validation does not capture images, call AI providers or send alerts.",
+        "title": "Add a printer",
+        "description": "Name your printer, choose its camera and printer entities, then choose AI tasks and a notification action. You can add up to two printers, one at a time.",
         "data": {
           "name": "Printer name",
           "camera": "Camera",
@@ -24,34 +24,34 @@
           "bed_temperature": "Bed temperature (optional)"
         },
         "data_description": {
-          "name": "A short name for the diagnostic sensor and alert title.",
-          "camera": "An available JPEG camera showing this printer.",
-          "ai_task": "Image-capable AI Task with structured data for the comparison. Its provider receives frames and telemetry and may charge.",
-          "screen_ai_task": "Optional separate AI Task for the first frame. Leave empty to use the comparison task. A configured task never silently falls back.",
-          "notify_service": "An existing notify action accepting title and message, for example notify.example_phone. No test alert is sent.",
-          "print_status": "Sensor reporting running while a print is active.",
-          "current_stage": "Sensor reporting printing during the printable stage.",
-          "online": "Binary sensor reporting on when the printer is connected.",
-          "print_error": "Binary sensor reporting off when no printer error is present.",
-          "task_name": "Sensor identifying the current print job.",
-          "start_time": "Sensor identifying when the current print job started.",
-          "current_layer": "Optional current-layer telemetry sent with the assessment.",
-          "total_layer_count": "Optional total-layer telemetry sent with the assessment.",
-          "print_progress": "Optional print-progress telemetry sent with the assessment.",
-          "nozzle_temperature": "Optional nozzle-temperature telemetry sent with the assessment.",
-          "bed_temperature": "Optional bed-temperature telemetry sent with the assessment."
+          "name": "The name shown on the diagnostic sensor and in alerts.",
+          "camera": "Choose an available camera that shows this printer and provides JPEG images.",
+          "ai_task": "Choose an AI Task to compare camera frames. It must support images and structured data. Its provider receives camera frames and printer data and may charge for requests.",
+          "screen_ai_task": "Choose a separate AI Task to check the first frame, or leave this empty to use the comparison task. If selected, it won't fall back to the comparison task when unavailable.",
+          "notify_service": "Choose a notify action that accepts a title and message, for example notify.example_phone. Setup won't send a test alert.",
+          "print_status": "Choose the sensor that reports running while a print is active.",
+          "current_stage": "Choose the sensor that reports printing during the printable stage.",
+          "online": "Choose the binary sensor that reports on when this printer is connected.",
+          "print_error": "Choose the binary sensor that reports off when this printer has no error.",
+          "task_name": "Choose the sensor that identifies the current print job.",
+          "start_time": "Choose the sensor that identifies when the current print job started.",
+          "current_layer": "Choose a sensor for the current layer, or leave this empty. Its value is sent with camera frames.",
+          "total_layer_count": "Choose a sensor for the total layer count, or leave this empty. Its value is sent with camera frames.",
+          "print_progress": "Choose a sensor for print progress, or leave this empty. Its value is sent with camera frames.",
+          "nozzle_temperature": "Choose a sensor for the nozzle temperature, or leave this empty. Its value is sent with camera frames.",
+          "bed_temperature": "Choose a sensor for the bed temperature, or leave this empty. Its value is sent with camera frames."
         }
       }
     },
     "error": {
-      "invalid_config": "Enter a printable name, each required printer entity, AI Task and notify action. Check entity domains and select a distinct entity for each printer role.",
-      "printer_conflict": "This printer identity or one of its entities is already owned by YAML or another Printer Guard entry. Remove it from that source first.",
-      "missing_media": "Configure homeassistant.media_dirs.local as an existing, writable absolute local directory, then restart Home Assistant.",
-      "missing_entity": "This entity does not exist. Configure the entity first or select another.",
-      "unavailable_entity": "This entity is unavailable. Restore it or select another before saving.",
-      "unsupported_ai_task": "Select an AI Task supporting structured data generation and image attachments.",
-      "missing_notify_service": "This notify action is not registered. Configure it first or select another.",
-      "printer_limit": "Printer Guard supports at most two printers total across YAML and UI. Remove another configuration first."
+      "invalid_config": "Check the printer name, required entities, AI Task and notification action. Make sure each entity has the right type and is used for only one printer role.",
+      "printer_conflict": "This printer or one of its entities is already used by another Printer Guard configuration. Remove the existing configuration before adding it again.",
+      "missing_media": "Set homeassistant.media_dirs.local to an existing, writable local directory using its full path, then restart Home Assistant.",
+      "missing_entity": "This entity wasn't found. Set it up first or choose another.",
+      "unavailable_entity": "This entity is unavailable. Restore it or choose another before saving.",
+      "unsupported_ai_task": "Choose an AI Task that supports structured data and image attachments.",
+      "missing_notify_service": "This notification action wasn't found. Set it up first or choose another.",
+      "printer_limit": "Printer Guard supports up to two printers. Remove an existing printer configuration before continuing."
     },
     "abort": {
       "already_configured": "This printer is already configured."
@@ -60,8 +60,8 @@
   "options": {
     "step": {
       "init": {
-        "title": "Configure UI-managed printer",
-        "description": "Edits apply by reloading this printer, canceling any in-flight assessment. Select each printer entity directly; its diagnostic identity stays fixed. These changes do not rewrite YAML.",
+        "title": "Configure printer",
+        "description": "Update this printer's name, entities, camera, AI tasks or notification action. Saving reloads the printer and stops any check in progress.",
         "data": {
           "name": "Printer name",
           "camera": "Camera",
@@ -81,34 +81,34 @@
           "bed_temperature": "Bed temperature (optional)"
         },
         "data_description": {
-          "name": "A short name for the diagnostic sensor and alert title.",
-          "camera": "An available JPEG camera showing this printer.",
-          "ai_task": "Image-capable AI Task with structured data for the comparison. Its provider receives frames and telemetry and may charge.",
-          "screen_ai_task": "Optional separate AI Task for the first frame. Leave empty to use the comparison task. A configured task never silently falls back.",
-          "notify_service": "An existing notify action accepting title and message, for example notify.example_phone. No test alert is sent.",
-          "print_status": "Sensor reporting running while a print is active.",
-          "current_stage": "Sensor reporting printing during the printable stage.",
-          "online": "Binary sensor reporting on when the printer is connected.",
-          "print_error": "Binary sensor reporting off when no printer error is present.",
-          "task_name": "Sensor identifying the current print job.",
-          "start_time": "Sensor identifying when the current print job started.",
-          "current_layer": "Optional current-layer telemetry sent with the assessment.",
-          "total_layer_count": "Optional total-layer telemetry sent with the assessment.",
-          "print_progress": "Optional print-progress telemetry sent with the assessment.",
-          "nozzle_temperature": "Optional nozzle-temperature telemetry sent with the assessment.",
-          "bed_temperature": "Optional bed-temperature telemetry sent with the assessment."
+          "name": "The name shown on the diagnostic sensor and in alerts.",
+          "camera": "Choose an available camera that shows this printer and provides JPEG images.",
+          "ai_task": "Choose an AI Task to compare camera frames. It must support images and structured data. Its provider receives camera frames and printer data and may charge for requests.",
+          "screen_ai_task": "Choose a separate AI Task to check the first frame, or leave this empty to use the comparison task. If selected, it won't fall back to the comparison task when unavailable.",
+          "notify_service": "Choose a notify action that accepts a title and message, for example notify.example_phone. Setup won't send a test alert.",
+          "print_status": "Choose the sensor that reports running while a print is active.",
+          "current_stage": "Choose the sensor that reports printing during the printable stage.",
+          "online": "Choose the binary sensor that reports on when this printer is connected.",
+          "print_error": "Choose the binary sensor that reports off when this printer has no error.",
+          "task_name": "Choose the sensor that identifies the current print job.",
+          "start_time": "Choose the sensor that identifies when the current print job started.",
+          "current_layer": "Choose a sensor for the current layer, or leave this empty. Its value is sent with camera frames.",
+          "total_layer_count": "Choose a sensor for the total layer count, or leave this empty. Its value is sent with camera frames.",
+          "print_progress": "Choose a sensor for print progress, or leave this empty. Its value is sent with camera frames.",
+          "nozzle_temperature": "Choose a sensor for the nozzle temperature, or leave this empty. Its value is sent with camera frames.",
+          "bed_temperature": "Choose a sensor for the bed temperature, or leave this empty. Its value is sent with camera frames."
         }
       }
     },
     "error": {
-      "invalid_config": "Enter a printable name, each required printer entity, AI Task and notify action. Check entity domains and select a distinct entity for each printer role.",
-      "printer_conflict": "This printer identity or one of its entities is already owned by YAML or another Printer Guard entry. Remove it from that source first.",
-      "missing_media": "Configure homeassistant.media_dirs.local as an existing, writable absolute local directory, then restart Home Assistant.",
-      "missing_entity": "This entity does not exist. Configure the entity first or select another.",
-      "unavailable_entity": "This entity is unavailable. Restore it or select another before saving.",
-      "unsupported_ai_task": "Select an AI Task supporting structured data generation and image attachments.",
-      "missing_notify_service": "This notify action is not registered. Configure it first or select another.",
-      "printer_limit": "Printer Guard supports at most two printers total across YAML and UI. Remove another configuration first."
+      "invalid_config": "Check the printer name, required entities, AI Task and notification action. Make sure each entity has the right type and is used for only one printer role.",
+      "printer_conflict": "This printer or one of its entities is already used by another Printer Guard configuration. Remove the existing configuration before adding it again.",
+      "missing_media": "Set homeassistant.media_dirs.local to an existing, writable local directory using its full path, then restart Home Assistant.",
+      "missing_entity": "This entity wasn't found. Set it up first or choose another.",
+      "unavailable_entity": "This entity is unavailable. Restore it or choose another before saving.",
+      "unsupported_ai_task": "Choose an AI Task that supports structured data and image attachments.",
+      "missing_notify_service": "This notification action wasn't found. Set it up first or choose another.",
+      "printer_limit": "Printer Guard supports up to two printers. Remove an existing printer configuration before continuing."
     }
   },
   "exceptions": {
