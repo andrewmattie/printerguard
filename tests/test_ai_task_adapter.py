@@ -15,6 +15,7 @@ class Bus:
     def __init__(self,root,fail=False): self.root=root; self.fail=fail; self.paths=[]
     async def async_call(self,domain,service,data,blocking,return_response):
         self.structure=data['structure']
+        self.instructions=data['instructions']
         self.paths=[self.root / x['media_content_id'].split('local/')[1] for x in data['attachments']]
         assert all(p.exists() for p in self.paths)
         assert domain=='ai_task' and service=='generate_data' and return_response
@@ -47,6 +48,45 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                     (screen_task or 'ai_task.example_comparison', 1),
                     ('ai_task.example_comparison', 3),
                 ])
+                self.assertEqual(list(root.iterdir()), [])
+
+    async def test_screen_and_comparison_use_print_area_judgeability(self):
+        for comparison in (False, True):
+            with self.subTest(comparison=comparison), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                bus = Bus(root)
+                adapter = mod.AITaskAdapter(SimpleNamespace(services=bus), 'ai_task.example', staging(root))
+                frame = SimpleNamespace(content=b'1234')
+                telemetry = {'status': 'running'}
+                if comparison:
+                    await adapter.compare([frame] * 3, telemetry)
+                else:
+                    await adapter.screen(frame, telemetry)
+                instructions = bus.instructions
+                for rule in (
+                    'Identify only visible spaghetti, large detached material or major deformation.',
+                    'Mark a frame judgeable if the printed object and nearby build plate are visible clearly enough to assess these defects.',
+                    'A blurred or streaked print head alone does not make the frame unjudgeable.',
+                    'Mark a frame unjudgeable if the image is blank or the relevant print area is obscured, out of frame or too degraded to assess.',
+                    'If a possible defect is ambiguous in an otherwise judgeable frame, describe the visible observation and its uncertainty;',
+                    'do not mark the whole frame unjudgeable or claim the print is fine solely because the defect is uncertain.',
+                    'Do not infer image freshness or motion from still images.',
+                    'Report one score and visual evidence per frame.',
+                    'Telemetry is context only: {"status": "running"}',
+                ):
+                    self.assertIn(rule, instructions)
+                self.assertNotIn('frozen-looking', instructions)
+                self.assertNotIn('or uncertain mark unjudgeable', instructions)
+                if comparison:
+                    self.assertIn('three ordered still photographs', instructions)
+                    self.assertIn('Assess each frame independently; do not infer unobserved motion.', instructions)
+                else:
+                    self.assertIn('one still photograph', instructions)
+                for number in range(1, 4 if comparison else 2):
+                    self.assertIn('printed object and nearby build plate', bus.structure[f'frame_{number}_judgeable']['description'])
+                    evidence = bus.structure[f'frame_{number}_evidence']['description']
+                    self.assertIn('Describe ambiguous observations without asserting a defect or claiming the print is fine.', evidence)
+                    self.assertIn('Never infer motion or freshness from still images.', evidence)
                 self.assertEqual(list(root.iterdir()), [])
 
     async def test_repeated_cancellation_waits_for_preparation_and_cleanup(self):

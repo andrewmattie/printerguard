@@ -5,9 +5,9 @@ import json
 from .media import Staging
 
 FIELD = {
-    'judgeable': {'description':'Is this frame clear enough to assess the print?', 'required':True, 'selector':{'boolean':{}}},
+    'judgeable': {'description':'Are the printed object and nearby build plate clear enough to assess the specified defects?', 'required':True, 'selector':{'boolean':{}}},
     'score': {'description':'Probability from 0 to 1 of a visibly failed print in this frame.', 'required':True, 'selector':{'number':{'min':0,'max':1,'step':0.01}}},
-    'evidence': {'description':'Visible evidence only; empty if none. Never infer motion from one still.', 'required':True, 'selector':{'text':{}}},
+    'evidence': {'description':'Visible evidence only; empty if none. Describe ambiguous observations without asserting a defect or claiming the print is fine. Never infer motion or freshness from still images.', 'required':True, 'selector':{'text':{}}},
 }
 
 async def _finish_file_task(task):
@@ -76,7 +76,12 @@ class AITaskAdapter:
                         'Assess each frame independently; do not infer unobserved motion. '
                         if comparison else 'Assess this one still photograph of a 3D print. Do not infer motion. ')
             instruction=(question+'Identify only visible spaghetti, large detached material or major deformation. '
-                         'If obscured, blank, frozen-looking or uncertain mark unjudgeable. '
+                         'Mark a frame judgeable if the printed object and nearby build plate are visible clearly enough to assess these defects. '
+                         'A blurred or streaked print head alone does not make the frame unjudgeable. '
+                         'Mark a frame unjudgeable if the image is blank or the relevant print area is obscured, out of frame or too degraded to assess. '
+                         'If a possible defect is ambiguous in an otherwise judgeable frame, describe the visible observation and its uncertainty; '
+                         'do not mark the whole frame unjudgeable or claim the print is fine solely because the defect is uncertain. '
+                         'Do not infer image freshness or motion from still images. '
                          'Report one score and visual evidence per frame. Telemetry is context only: '+json.dumps(telemetry, default=str))
             self.diagnostic_phase = 'ai_service'
             response=await self.hass.services.async_call('ai_task','generate_data',{
