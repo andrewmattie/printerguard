@@ -6,7 +6,7 @@ alerts only if all three frames are flagged.
 
 Checks start after a two-minute delay and run every minute. After a successful
 notify action, repeats for that printer and job are suppressed for 30 minutes.
-New jobs don't inherit the cooldown; Home Assistant restarts clear it.
+New jobs don't inherit the cooldown; Home Assistant restarts clear it./
 
 ## Setup
 
